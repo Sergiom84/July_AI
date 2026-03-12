@@ -7,8 +7,14 @@ from typing import Any, Callable
 
 from july.config import get_settings
 from july.db import JulyDatabase
+from july.external_refs import fetch_reference_page, suggest_references_for_context
 from july.llm import LLMProviderError, create_llm_provider
-from july.pipeline import apply_classification_overrides, create_capture_plan
+from july.pipeline import (
+    apply_classification_overrides,
+    create_capture_plan,
+    enrich_plan_with_proactive_recall,
+)
+from july.url_fetcher import fetch_url_metadata
 
 PROTOCOL_VERSION = "2025-03-26"
 
@@ -35,7 +41,7 @@ class JulyMCPServer:
             "capture_input": ToolSpec(
                 name="capture_input",
                 title="Capture Input",
-                description="Capture a free-form input into July and optionally refine classification with the configured LLM.",
+                description="Capture a free-form input into July with proactive recall and external reference suggestions.",
                 input_schema={
                     "type": "object",
                     "properties": {
@@ -44,6 +50,8 @@ class JulyMCPServer:
                         "source_ref": {"type": "string", "description": "Optional external message id or reference."},
                         "use_llm": {"type": "boolean", "description": "Whether to refine classification using the configured LLM."},
                         "dry_run": {"type": "boolean", "description": "When true, return the plan without saving it."},
+                        "fetch_urls": {"type": "boolean", "description": "Fetch metadata for detected URLs."},
+                        "model_name": {"type": "string", "description": "Name of the contributing model for traceability."},
                     },
                     "required": ["text"],
                 },
@@ -123,6 +131,180 @@ class JulyMCPServer:
                 },
                 handler=self.tool_promote_memory,
             ),
+            # ── Session protocol ─────────────────────────────
+            "session_start": ToolSpec(
+                name="session_start",
+                title="Session Start",
+                description="Start a new working session. Returns session id and status.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "session_key": {"type": "string", "description": "Unique session key."},
+                        "project_key": {"type": "string"},
+                        "agent_name": {"type": "string"},
+                        "goal": {"type": "string"},
+                    },
+                    "required": ["session_key"],
+                },
+                handler=self.tool_session_start,
+            ),
+            "session_summary": ToolSpec(
+                name="session_summary",
+                title="Session Summary",
+                description="Save a structured summary for the current session before closing it.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "session_key": {"type": "string"},
+                        "summary": {"type": "string"},
+                        "discoveries": {"type": "string"},
+                        "accomplished": {"type": "string"},
+                        "next_steps": {"type": "string"},
+                        "relevant_files": {"type": "string"},
+                    },
+                    "required": ["session_key", "summary"],
+                },
+                handler=self.tool_session_summary,
+            ),
+            "session_end": ToolSpec(
+                name="session_end",
+                title="Session End",
+                description="Close a session. If no summary was saved, it will be marked as closed_without_summary.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "session_key": {"type": "string"},
+                    },
+                    "required": ["session_key"],
+                },
+                handler=self.tool_session_end,
+            ),
+            "session_context": ToolSpec(
+                name="session_context",
+                title="Session Context",
+                description="Recover context from recent sessions, optionally filtered by project.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "project_key": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                },
+                handler=self.tool_session_context,
+            ),
+            # ── Topic keys ───────────────────────────────────
+            "topic_create": ToolSpec(
+                name="topic_create",
+                title="Create Topic",
+                description="Create a stable topic key for grouping related knowledge across sessions and projects.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "topic_key": {"type": "string", "description": "Stable key like 'auth/jwt-flow' or 'mcp/integration'."},
+                        "label": {"type": "string"},
+                        "domain": {"type": "string"},
+                        "description": {"type": "string"},
+                    },
+                    "required": ["topic_key", "label"],
+                },
+                handler=self.tool_topic_create,
+            ),
+            "topic_link": ToolSpec(
+                name="topic_link",
+                title="Link to Topic",
+                description="Link an inbox item, memory item, or session to a topic key.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "topic_key": {"type": "string"},
+                        "inbox_item_id": {"type": "integer"},
+                        "memory_item_id": {"type": "integer"},
+                        "session_id": {"type": "integer"},
+                    },
+                    "required": ["topic_key"],
+                },
+                handler=self.tool_topic_link,
+            ),
+            "topic_context": ToolSpec(
+                name="topic_context",
+                title="Topic Context",
+                description="Show everything linked to a topic key: memories, sessions, inbox items.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "topic_key": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": ["topic_key"],
+                },
+                handler=self.tool_topic_context,
+            ),
+            # ── Model contributions ──────────────────────────
+            "save_model_contribution": ToolSpec(
+                name="save_model_contribution",
+                title="Save Model Contribution",
+                description="Record a contribution (proposal, decision, analysis) from an AI model for traceability.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "model_name": {"type": "string"},
+                        "contribution_type": {"type": "string"},
+                        "title": {"type": "string"},
+                        "content": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "domain": {"type": "string"},
+                        "adopted": {"type": "boolean"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["model_name", "contribution_type", "title", "content"],
+                },
+                handler=self.tool_save_model_contribution,
+            ),
+            # ── URL fetch ────────────────────────────────────
+            "fetch_url": ToolSpec(
+                name="fetch_url",
+                title="Fetch URL Metadata",
+                description="Fetch title, description, and content from a URL. Special handling for YouTube.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "url": {"type": "string"},
+                        "artifact_id": {"type": "integer"},
+                    },
+                    "required": ["url"],
+                },
+                handler=self.tool_fetch_url,
+            ),
+            # ── External references ──────────────────────────
+            "fetch_reference": ToolSpec(
+                name="fetch_reference",
+                title="Fetch External Reference",
+                description="Fetch content from a known reference source (skills.sh, agents.md) for inspiration.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "source_key": {"type": "string", "enum": ["skills.sh", "agents.md"]},
+                    },
+                    "required": ["source_key"],
+                },
+                handler=self.tool_fetch_reference,
+            ),
+            # ── Proactive recall ─────────────────────────────
+            "proactive_recall": ToolSpec(
+                name="proactive_recall",
+                title="Proactive Recall",
+                description="Search memory proactively for related items. Returns memories, sessions, and suggestions.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Input text to find related knowledge."},
+                        "project_key": {"type": "string"},
+                        "limit": {"type": "integer"},
+                    },
+                    "required": ["text"],
+                },
+                handler=self.tool_proactive_recall,
+            ),
         }
 
     def serve_stdio(self) -> int:
@@ -149,8 +331,12 @@ class JulyMCPServer:
                 {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "July", "version": "0.1.0"},
-                    "instructions": "July exposes memory capture, search, clarification, and project context tools.",
+                    "serverInfo": {"name": "July", "version": "0.2.0"},
+                    "instructions": (
+                        "July exposes memory capture, search, sessions, topic keys, "
+                        "model traceability, URL fetching, external references, "
+                        "proactive recall, and project context tools."
+                    ),
                 },
             )
             return
@@ -230,20 +416,48 @@ class JulyMCPServer:
         sys.stdout.write(json.dumps(response, ensure_ascii=True) + "\n")
         sys.stdout.flush()
 
+    # ── Tool handlers ────────────────────────────────────────
+
     def tool_capture_input(self, arguments: dict[str, Any]) -> dict[str, Any]:
         raw_input = require_string(arguments, "text")
         source = arguments.get("source", "mcp")
         source_ref = arguments.get("source_ref")
         use_llm = bool(arguments.get("use_llm", False))
         dry_run = bool(arguments.get("dry_run", False))
+        fetch_urls = bool(arguments.get("fetch_urls", False))
+        model_name = arguments.get("model_name")
 
         plan = create_capture_plan(raw_input)
         if use_llm:
             plan = self._maybe_enrich_capture_with_llm(raw_input, plan)
+
+        # Proactive recall
+        project_key = plan["classification"].get("project_key")
+        recall = self.database.proactive_recall(raw_input, project_key=project_key)
+        plan = enrich_plan_with_proactive_recall(plan, recall)
+
         if dry_run:
             return {"saved": False, "plan": plan}
 
         result = self.database.capture(raw_input, source, source_ref, plan)
+
+        # Fetch URL metadata
+        if fetch_urls:
+            for url in plan["context"].get("urls", []):
+                meta = fetch_url_metadata(url)
+                self.database.save_url_metadata(url, **{k: v for k, v in meta.items() if k != "url"})
+
+        # Record model contribution
+        if model_name:
+            self.database.save_model_contribution(
+                model_name=model_name,
+                contribution_type="capture_input",
+                title=plan["classification"]["normalized_summary"],
+                content=raw_input,
+                inbox_item_id=result["inbox_item_id"],
+                project_key=project_key,
+            )
+
         return {"saved": True, "result": result, "plan": plan}
 
     def tool_search_context(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -295,6 +509,96 @@ class JulyMCPServer:
             importance=arguments.get("importance"),
         )
         return {"promoted": True, "memory_item": dict(promoted)}
+
+    def tool_session_start(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session_key = require_string(arguments, "session_key")
+        return self.database.session_start(
+            session_key,
+            project_key=arguments.get("project_key"),
+            agent_name=arguments.get("agent_name"),
+            goal=arguments.get("goal"),
+        )
+
+    def tool_session_summary(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session_key = require_string(arguments, "session_key")
+        summary = require_string(arguments, "summary")
+        return self.database.session_summary(
+            session_key,
+            summary=summary,
+            discoveries=arguments.get("discoveries"),
+            accomplished=arguments.get("accomplished"),
+            next_steps=arguments.get("next_steps"),
+            relevant_files=arguments.get("relevant_files"),
+        )
+
+    def tool_session_end(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        session_key = require_string(arguments, "session_key")
+        return self.database.session_end(session_key)
+
+    def tool_session_context(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        project_key = arguments.get("project_key")
+        limit = int(arguments.get("limit", 5))
+        return {"sessions": self.database.session_context(project_key=project_key, limit=limit)}
+
+    def tool_topic_create(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        topic_key = require_string(arguments, "topic_key")
+        label = require_string(arguments, "label")
+        domain = arguments.get("domain", "Programacion")
+        description = arguments.get("description")
+        return self.database.create_topic(topic_key, label, domain, description=description)
+
+    def tool_topic_link(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        topic_key = require_string(arguments, "topic_key")
+        return self.database.link_to_topic(
+            topic_key,
+            inbox_item_id=arguments.get("inbox_item_id"),
+            memory_item_id=arguments.get("memory_item_id"),
+            session_id=arguments.get("session_id"),
+        )
+
+    def tool_topic_context(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        topic_key = require_string(arguments, "topic_key")
+        limit = int(arguments.get("limit", 20))
+        return self.database.topic_context(topic_key, limit=limit)
+
+    def tool_save_model_contribution(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.database.save_model_contribution(
+            model_name=require_string(arguments, "model_name"),
+            contribution_type=require_string(arguments, "contribution_type"),
+            title=require_string(arguments, "title"),
+            content=require_string(arguments, "content"),
+            project_key=arguments.get("project_key"),
+            domain=arguments.get("domain"),
+            adopted=bool(arguments.get("adopted", False)),
+            notes=arguments.get("notes"),
+        )
+
+    def tool_fetch_url(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        url = require_string(arguments, "url")
+        artifact_id = arguments.get("artifact_id")
+        meta = fetch_url_metadata(url)
+        db_result = self.database.save_url_metadata(
+            url,
+            artifact_id=artifact_id,
+            **{k: v for k, v in meta.items() if k not in ("url", "fetch_status")},
+            fetch_status=meta["fetch_status"],
+        )
+        return {**meta, **db_result}
+
+    def tool_fetch_reference(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        source_key = require_string(arguments, "source_key")
+        return fetch_reference_page(source_key)
+
+    def tool_proactive_recall(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        text = require_string(arguments, "text")
+        project_key = arguments.get("project_key")
+        limit = int(arguments.get("limit", 5))
+        recall = self.database.proactive_recall(text, project_key=project_key, limit=limit)
+
+        # Also add external reference suggestions
+        ext_suggestions = suggest_references_for_context(text, project_key=project_key)
+        recall["external_ref_suggestions"] = ext_suggestions
+        return recall
 
     def _maybe_enrich_capture_with_llm(
         self,

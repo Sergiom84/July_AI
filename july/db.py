@@ -86,6 +86,87 @@ CREATE TABLE IF NOT EXISTS clarification_events (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sessions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key TEXT NOT NULL UNIQUE,
+    project_key TEXT,
+    agent_name TEXT,
+    goal TEXT,
+    status TEXT NOT NULL DEFAULT 'active',
+    summary TEXT,
+    discoveries TEXT,
+    accomplished TEXT,
+    next_steps TEXT,
+    relevant_files TEXT,
+    started_at TEXT NOT NULL,
+    ended_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS topic_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_key TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    domain TEXT NOT NULL,
+    description TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS topic_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_key_id INTEGER NOT NULL REFERENCES topic_keys(id) ON DELETE CASCADE,
+    inbox_item_id INTEGER REFERENCES inbox_items(id) ON DELETE SET NULL,
+    memory_item_id INTEGER REFERENCES memory_items(id) ON DELETE SET NULL,
+    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_contributions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    model_name TEXT NOT NULL,
+    contribution_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    inbox_item_id INTEGER REFERENCES inbox_items(id) ON DELETE SET NULL,
+    memory_item_id INTEGER REFERENCES memory_items(id) ON DELETE SET NULL,
+    session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+    project_key TEXT,
+    domain TEXT,
+    adopted INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS url_metadata (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id INTEGER REFERENCES artifacts(id) ON DELETE CASCADE,
+    url TEXT NOT NULL,
+    resolved_title TEXT,
+    description TEXT,
+    content_type TEXT,
+    extracted_text TEXT,
+    youtube_video_id TEXT,
+    youtube_channel TEXT,
+    youtube_duration TEXT,
+    fetch_status TEXT NOT NULL DEFAULT 'pending',
+    fetched_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS external_references (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source_url TEXT NOT NULL,
+    source_name TEXT NOT NULL,
+    reference_type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT,
+    relevance_note TEXT,
+    inbox_item_id INTEGER REFERENCES inbox_items(id) ON DELETE SET NULL,
+    memory_item_id INTEGER REFERENCES memory_items(id) ON DELETE SET NULL,
+    project_key TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS inbox_items_fts USING fts5(
     raw_input,
     normalized_summary,
@@ -547,12 +628,439 @@ class JulyDatabase:
         return {"inbox": inbox_rows, "memory": memory_rows, "tasks": task_rows}
 
     def get_record(self, table: str, record_id: int) -> sqlite3.Row | None:
-        allowed_tables = {"inbox_items", "tasks", "memory_items", "artifacts", "project_links", "clarification_events"}
+        allowed_tables = {
+            "inbox_items", "tasks", "memory_items", "artifacts", "project_links",
+            "clarification_events", "sessions", "topic_keys", "topic_links",
+            "model_contributions", "url_metadata", "external_references",
+        }
         if table not in allowed_tables:
             raise ValueError(f"Unsupported table: {table}")
         with self.connection() as conn:
             cursor = conn.execute(f"SELECT * FROM {table} WHERE id = ?", (record_id,))
             return cursor.fetchone()
+
+    # ── Session protocol ──────────────────────────────────────────────
+
+    def session_start(
+        self,
+        session_key: str,
+        *,
+        project_key: str | None = None,
+        agent_name: str | None = None,
+        goal: str | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM sessions WHERE session_key = ?", (session_key,)
+            ).fetchone()
+            if existing:
+                return {"session_id": existing["id"], "status": "already_active", "started_at": existing["started_at"]}
+            cursor = conn.execute(
+                """
+                INSERT INTO sessions (session_key, project_key, agent_name, goal, status, started_at)
+                VALUES (?, ?, ?, ?, 'active', ?)
+                """,
+                (session_key, project_key, agent_name, goal, timestamp),
+            )
+        return {"session_id": cursor.lastrowid, "status": "active", "started_at": timestamp}
+
+    def session_summary(
+        self,
+        session_key: str,
+        *,
+        summary: str,
+        discoveries: str | None = None,
+        accomplished: str | None = None,
+        next_steps: str | None = None,
+        relevant_files: str | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_key = ?", (session_key,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Session '{session_key}' not found")
+            conn.execute(
+                """
+                UPDATE sessions
+                SET summary = ?, discoveries = ?, accomplished = ?,
+                    next_steps = ?, relevant_files = ?, status = 'summarized',
+                    ended_at = ?
+                WHERE session_key = ?
+                """,
+                (summary, discoveries, accomplished, next_steps, relevant_files, timestamp, session_key),
+            )
+        return {"session_key": session_key, "status": "summarized", "ended_at": timestamp}
+
+    def session_end(self, session_key: str) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM sessions WHERE session_key = ?", (session_key,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Session '{session_key}' not found")
+            new_status = "closed" if row["summary"] else "closed_without_summary"
+            conn.execute(
+                "UPDATE sessions SET status = ?, ended_at = COALESCE(ended_at, ?) WHERE session_key = ?",
+                (new_status, timestamp, session_key),
+            )
+        return {"session_key": session_key, "status": new_status, "ended_at": timestamp}
+
+    def session_context(self, project_key: str | None = None, limit: int = 5) -> list[dict]:
+        with self.connection() as conn:
+            if project_key:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_key, project_key, agent_name, goal, status,
+                           summary, discoveries, next_steps, started_at, ended_at
+                    FROM sessions
+                    WHERE project_key = ?
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (project_key, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT id, session_key, project_key, agent_name, goal, status,
+                           summary, discoveries, next_steps, started_at, ended_at
+                    FROM sessions
+                    ORDER BY id DESC LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [dict(r) for r in rows]
+
+    def list_sessions(self, status: str | None = None, limit: int = 20) -> list[sqlite3.Row]:
+        query = """
+            SELECT id, session_key, project_key, agent_name, goal, status, started_at, ended_at
+            FROM sessions
+        """
+        params: list[object] = []
+        if status:
+            query += " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self.connection() as conn:
+            return conn.execute(query, tuple(params)).fetchall()
+
+    # ── Topic keys ────────────────────────────────────────────────────
+
+    def create_topic(self, topic_key: str, label: str, domain: str, description: str | None = None) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM topic_keys WHERE topic_key = ?", (topic_key,)
+            ).fetchone()
+            if existing:
+                return {"topic_id": existing["id"], "status": "already_exists"}
+            cursor = conn.execute(
+                """
+                INSERT INTO topic_keys (topic_key, label, domain, description, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (topic_key, label, domain, description, timestamp, timestamp),
+            )
+        return {"topic_id": cursor.lastrowid, "status": "created"}
+
+    def link_to_topic(
+        self,
+        topic_key: str,
+        *,
+        inbox_item_id: int | None = None,
+        memory_item_id: int | None = None,
+        session_id: int | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            topic = conn.execute(
+                "SELECT id FROM topic_keys WHERE topic_key = ?", (topic_key,)
+            ).fetchone()
+            if topic is None:
+                raise ValueError(f"Topic '{topic_key}' not found")
+            conn.execute(
+                """
+                INSERT INTO topic_links (topic_key_id, inbox_item_id, memory_item_id, session_id, created_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (topic["id"], inbox_item_id, memory_item_id, session_id, timestamp),
+            )
+        return {"linked": True, "topic_key": topic_key}
+
+    def topic_context(self, topic_key: str, limit: int = 20) -> dict:
+        with self.connection() as conn:
+            topic = conn.execute(
+                "SELECT * FROM topic_keys WHERE topic_key = ?", (topic_key,)
+            ).fetchone()
+            if topic is None:
+                raise ValueError(f"Topic '{topic_key}' not found")
+            links = conn.execute(
+                """
+                SELECT tl.id, tl.inbox_item_id, tl.memory_item_id, tl.session_id, tl.created_at
+                FROM topic_links tl
+                WHERE tl.topic_key_id = ?
+                ORDER BY tl.id DESC LIMIT ?
+                """,
+                (topic["id"], limit),
+            ).fetchall()
+            memory_ids = [l["memory_item_id"] for l in links if l["memory_item_id"]]
+            memories = []
+            for mid in memory_ids:
+                row = conn.execute(
+                    "SELECT id, memory_kind, status, title, summary, domain, scope, project_key FROM memory_items WHERE id = ?",
+                    (mid,),
+                ).fetchone()
+                if row:
+                    memories.append(dict(row))
+        return {"topic": dict(topic), "links": [dict(l) for l in links], "memories": memories}
+
+    def list_topics(self, limit: int = 50) -> list[sqlite3.Row]:
+        with self.connection() as conn:
+            return conn.execute(
+                "SELECT id, topic_key, label, domain, description, created_at FROM topic_keys ORDER BY id DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+
+    # ── Model contributions / traceability ────────────────────────────
+
+    def save_model_contribution(
+        self,
+        model_name: str,
+        contribution_type: str,
+        title: str,
+        content: str,
+        *,
+        inbox_item_id: int | None = None,
+        memory_item_id: int | None = None,
+        session_id: int | None = None,
+        project_key: str | None = None,
+        domain: str | None = None,
+        adopted: bool = False,
+        notes: str | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO model_contributions (
+                    model_name, contribution_type, title, content,
+                    inbox_item_id, memory_item_id, session_id,
+                    project_key, domain, adopted, notes, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    model_name, contribution_type, title, content,
+                    inbox_item_id, memory_item_id, session_id,
+                    project_key, domain, int(adopted), notes, timestamp,
+                ),
+            )
+        return {"contribution_id": cursor.lastrowid, "model_name": model_name}
+
+    def list_model_contributions(
+        self, model_name: str | None = None, project_key: str | None = None, limit: int = 20
+    ) -> list[sqlite3.Row]:
+        query = """
+            SELECT id, model_name, contribution_type, title, project_key, domain, adopted, created_at
+            FROM model_contributions
+        """
+        clauses: list[str] = []
+        params: list[object] = []
+        if model_name:
+            clauses.append("model_name = ?")
+            params.append(model_name)
+        if project_key:
+            clauses.append("project_key = ?")
+            params.append(project_key)
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self.connection() as conn:
+            return conn.execute(query, tuple(params)).fetchall()
+
+    def adopt_contribution(self, contribution_id: int, notes: str | None = None) -> dict:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM model_contributions WHERE id = ?", (contribution_id,)
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Contribution {contribution_id} not found")
+            conn.execute(
+                "UPDATE model_contributions SET adopted = 1, notes = COALESCE(?, notes) WHERE id = ?",
+                (notes, contribution_id),
+            )
+        return {"adopted": True, "contribution_id": contribution_id}
+
+    # ── URL metadata ──────────────────────────────────────────────────
+
+    def save_url_metadata(
+        self,
+        url: str,
+        *,
+        artifact_id: int | None = None,
+        resolved_title: str | None = None,
+        description: str | None = None,
+        content_type: str | None = None,
+        extracted_text: str | None = None,
+        youtube_video_id: str | None = None,
+        youtube_channel: str | None = None,
+        youtube_duration: str | None = None,
+        fetch_status: str = "fetched",
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO url_metadata (
+                    artifact_id, url, resolved_title, description, content_type,
+                    extracted_text, youtube_video_id, youtube_channel, youtube_duration,
+                    fetch_status, fetched_at, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    artifact_id, url, resolved_title, description, content_type,
+                    extracted_text, youtube_video_id, youtube_channel, youtube_duration,
+                    fetch_status, timestamp, timestamp,
+                ),
+            )
+        return {"url_metadata_id": cursor.lastrowid, "url": url, "fetch_status": fetch_status}
+
+    def get_url_metadata(self, url: str) -> sqlite3.Row | None:
+        with self.connection() as conn:
+            return conn.execute(
+                "SELECT * FROM url_metadata WHERE url = ? ORDER BY id DESC LIMIT 1",
+                (url,),
+            ).fetchone()
+
+    # ── External references (skills.sh, agents.md, etc.) ─────────────
+
+    def save_external_reference(
+        self,
+        source_url: str,
+        source_name: str,
+        reference_type: str,
+        title: str,
+        *,
+        description: str | None = None,
+        relevance_note: str | None = None,
+        inbox_item_id: int | None = None,
+        memory_item_id: int | None = None,
+        project_key: str | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO external_references (
+                    source_url, source_name, reference_type, title,
+                    description, relevance_note, inbox_item_id, memory_item_id,
+                    project_key, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source_url, source_name, reference_type, title,
+                    description, relevance_note, inbox_item_id, memory_item_id,
+                    project_key, timestamp,
+                ),
+            )
+        return {"external_reference_id": cursor.lastrowid, "source_name": source_name}
+
+    def list_external_references(self, project_key: str | None = None, limit: int = 20) -> list[sqlite3.Row]:
+        if project_key:
+            query = """
+                SELECT id, source_url, source_name, reference_type, title, relevance_note, project_key, created_at
+                FROM external_references WHERE project_key = ? ORDER BY id DESC LIMIT ?
+            """
+            params: tuple = (project_key, limit)
+        else:
+            query = """
+                SELECT id, source_url, source_name, reference_type, title, relevance_note, project_key, created_at
+                FROM external_references ORDER BY id DESC LIMIT ?
+            """
+            params = (limit,)
+        with self.connection() as conn:
+            return conn.execute(query, params).fetchall()
+
+    # ── Proactive recall ──────────────────────────────────────────────
+
+    def proactive_recall(self, raw_input: str, project_key: str | None = None, limit: int = 5) -> dict:
+        """Search memory proactively for related items when a new input arrives."""
+        words = [w for w in raw_input.lower().split() if len(w) > 3]
+        if not words:
+            return {"related_memories": [], "related_sessions": [], "suggestions": []}
+
+        with self.connection() as conn:
+            # Search in memory via FTS
+            fts_query = " OR ".join(words[:8])
+            try:
+                memory_rows = conn.execute(
+                    """
+                    SELECT memory_items.id, memory_items.memory_kind, memory_items.status,
+                           memory_items.domain, memory_items.scope, memory_items.project_key,
+                           memory_items.title, memory_items.summary, memory_items.distilled_knowledge
+                    FROM memory_items_fts
+                    JOIN memory_items ON memory_items_fts.rowid = memory_items.id
+                    WHERE memory_items_fts MATCH ?
+                    ORDER BY memory_items.importance DESC, memory_items.id DESC
+                    LIMIT ?
+                    """,
+                    (fts_query, limit),
+                ).fetchall()
+            except sqlite3.OperationalError:
+                like_pattern = f"%{words[0]}%"
+                memory_rows = conn.execute(
+                    """
+                    SELECT id, memory_kind, status, domain, scope, project_key,
+                           title, summary, distilled_knowledge
+                    FROM memory_items
+                    WHERE title LIKE ? OR summary LIKE ? OR distilled_knowledge LIKE ?
+                    ORDER BY importance DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (like_pattern, like_pattern, like_pattern, limit),
+                ).fetchall()
+
+            # Also search recent sessions for relevant context
+            session_rows = []
+            if project_key:
+                session_rows = conn.execute(
+                    """
+                    SELECT id, session_key, project_key, goal, status, summary, next_steps, started_at
+                    FROM sessions
+                    WHERE project_key = ? AND summary IS NOT NULL
+                    ORDER BY id DESC LIMIT 3
+                    """,
+                    (project_key,),
+                ).fetchall()
+
+            # Build suggestions
+            suggestions = []
+            for mem in memory_rows:
+                if mem["status"] == "ready" and mem["scope"] == "global":
+                    suggestions.append({
+                        "type": "reuse_memory",
+                        "memory_id": mem["id"],
+                        "title": mem["title"],
+                        "reason": f"Memoria global reutilizable: {mem['distilled_knowledge'][:120]}",
+                    })
+                elif mem["project_key"] and mem["project_key"] != project_key:
+                    suggestions.append({
+                        "type": "cross_project",
+                        "memory_id": mem["id"],
+                        "title": mem["title"],
+                        "from_project": mem["project_key"],
+                        "reason": f"Ya resolviste algo parecido en {mem['project_key']}: {mem['title']}",
+                    })
+
+        return {
+            "related_memories": [dict(r) for r in memory_rows],
+            "related_sessions": [dict(r) for r in session_rows],
+            "suggestions": suggestions,
+        }
 
     def stats(self) -> dict[str, int]:
         with self.connection() as conn:
@@ -563,12 +1071,21 @@ class JulyDatabase:
                 "artifacts": conn.execute("SELECT COUNT(*) FROM artifacts").fetchone()[0],
                 "project_links": conn.execute("SELECT COUNT(*) FROM project_links").fetchone()[0],
                 "clarification_events": conn.execute("SELECT COUNT(*) FROM clarification_events").fetchone()[0],
+                "sessions": conn.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
+                "topic_keys": conn.execute("SELECT COUNT(*) FROM topic_keys").fetchone()[0],
+                "model_contributions": conn.execute("SELECT COUNT(*) FROM model_contributions").fetchone()[0],
+                "url_metadata": conn.execute("SELECT COUNT(*) FROM url_metadata").fetchone()[0],
+                "external_references": conn.execute("SELECT COUNT(*) FROM external_references").fetchone()[0],
             }
 
     def export_json(self, output_path: Path) -> None:
         payload: dict[str, list[dict]] = {}
         with self.connection() as conn:
-            for table in ("inbox_items", "tasks", "memory_items", "artifacts", "project_links", "clarification_events"):
+            for table in (
+                "inbox_items", "tasks", "memory_items", "artifacts", "project_links",
+                "clarification_events", "sessions", "topic_keys", "topic_links",
+                "model_contributions", "url_metadata", "external_references",
+        ):
                 rows = conn.execute(f"SELECT * FROM {table} ORDER BY id ASC").fetchall()
                 payload[table] = [dict(row) for row in rows]
         output_path.parent.mkdir(parents=True, exist_ok=True)
