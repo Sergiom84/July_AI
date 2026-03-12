@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import asdict
 
 from july.classifier import classify_input, extract_context
-from july.models import ClassificationResult, ExtractedContext
+from july.external_refs import suggest_references_for_context
+from july.models import ClassificationResult, ExtractedContext, ProactiveRecallResult
 
 
 def create_capture_plan(raw_input: str, clarification_answer: str | None = None) -> dict:
@@ -29,15 +30,39 @@ def build_plan(
     memory = build_memory_candidate(raw_input, classification)
     artifacts = build_artifacts(context)
 
+    # External reference suggestions (skills.sh, agents.md, etc.)
+    ext_suggestions = suggest_references_for_context(
+        raw_input,
+        project_key=classification.project_key,
+        intent=classification.intent,
+    )
+
     plan = {
         "context": asdict(context),
         "classification": asdict(classification),
         "task": task,
         "memory": memory,
         "artifacts": artifacts,
+        "external_ref_suggestions": ext_suggestions,
     }
     if clarification_answer:
         plan["clarification_answer"] = clarification_answer
+    return plan
+
+
+def enrich_plan_with_proactive_recall(plan: dict, recall_result: dict) -> dict:
+    """Merge proactive recall results into an existing capture plan."""
+    plan["proactive_recall"] = recall_result
+
+    suggestions = recall_result.get("suggestions", [])
+    if suggestions:
+        existing_summary = plan["classification"].get("normalized_summary", "")
+        hint_parts = []
+        for s in suggestions[:3]:
+            hint_parts.append(f"[{s['type']}] {s.get('reason', s.get('title', ''))}")
+        if hint_parts:
+            plan["proactive_hints"] = hint_parts
+
     return plan
 
 
@@ -64,6 +89,7 @@ def apply_classification_overrides(
         clarification_question=merged.get("clarification_question"),
         domain=merged["domain"],
         project_key=project_key,
+        topic_key=merged.get("topic_key"),
     )
     return build_plan(raw_input, context, classification, clarification_answer=clarification_answer)
 
