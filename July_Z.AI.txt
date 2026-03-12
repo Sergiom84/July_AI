@@ -1,0 +1,152 @@
+# Análisis de tu Idea: Sistema de Memoria Persistente para Programación con IA
+
+¡Excelente idea! Lo que describes es un problema muy real y actual en el desarrollo con IA. Antes de analizar los repositorios, déjame crear un plan de trabajo estructurado.
+Voy a analizar los tres repositorios que me has compartido. Primero necesito obtener información de cada uno.
+Voy a obtener más detalles de los README de cada repositorio:
+He analizado los tres repositorios. ¡Tienes referencias EXCELENTES! Te resumo lo que encontré y cómo se relaciona con tu idea:
+
+---
+
+## 📊 Análisis de los Repositorios
+
+### 1. **Engram** ⭐⭐⭐ (EL MÁS RELEVANTE)
+**¡Este es EXACTAMENTE lo que estás buscando!**
+
+Es un sistema de **memoria persistente para agentes de IA de programación**. Sus características:
+
+| Aspecto | Detalle |
+|---------|---------|
+| **Arquitectura** | Binario Go único con SQLite + FTS5 (búsqueda full-text) |
+| **Protocolo** | MCP (Model Context Protocol) - funciona con CUALQUIER agente |
+| **Agentes soportados** | Claude Code, OpenCode, Gemini CLI, Codex, VS Code Copilot, Cursor, Windsurf |
+| **Sin dependencias** | No necesita Node.js, Python, bases de datos vectoriales ni Docker |
+| **13 herramientas MCP** | `mem_save`, `mem_search`, `mem_context`, `mem_session_summary`, etc. |
+
+**Filosofía clave**: El agente decide qué recordar, no captura todo automáticamente. El agente guarda memorias estructuradas con formato:
+- **Qué** pasó
+- **Por qué** importa  
+- **Qué** aprendiste
+
+### 2. **Gentle-AI** 
+Es un **ecosistema configurador** que instala y configura múltiples herramientas:
+
+- Engram (memoria)
+- SDD (Spec-Driven Development)
+- Skills (patrones de código)
+- MCP servers (Context7 para documentación en tiempo real)
+- Persona y permisos
+
+Es como un "instalador todo-en-uno" para supercargar tu agente de IA.
+
+### 3. **OpenSpec**
+Framework de **Spec-Driven Development (SDD)**:
+
+- Workflow estructurado: `propose → specs → design → tasks → implement`
+- Funciona con 20+ herramientas de IA
+- Organiza el trabajo antes de programar
+- Cada cambio tiene su propia carpeta con proposal, specs, design y tasks
+
+---
+
+## 🔍 Respondiendo tus dudas
+
+### **¿Cómo guardar la información?**
+
+**Respuesta corta: NO uses Google Docs.** Usa una base de datos local con SQLite.
+
+| Opción | Pros | Contras |
+|--------|------|---------|
+| **Google Docs** | Familiar, accesible | No tiene búsqueda semántica, no se integra con LLMs, latencia |
+| **BD + MCP** | Búsqueda rápida, integración nativa con agentes | Requiere configuración inicial |
+| **Vector DB (ChromaDB)** | Búsqueda semántica | Complejidad, procesos adicionales |
+
+**La arquitectura de Engram es perfecta**:
+```
+Agente (Claude/Z.ai/etc)
+    ↓ MCP stdio
+Tu Sistema (binario/Node.js)
+    ↓
+SQLite + FTS5 (búsqueda full-text)
+```
+
+### **¿Cómo registrar conversaciones?**
+
+Dos enfoques:
+
+1. **Captura automática** → Guarda todo (como `claude-mem`)
+2. **Curación por el agente** → El agente decide qué guardar (como `Engram`)
+
+**Recomiendo el enfoque de Engram**:
+- `mem_save` después de resolver algo importante
+- `mem_session_summary` al cerrar sesión
+- Formato estructurado: **What/Why/Where/Learned**
+
+### **¿Cómo mantener contexto entre proyectos?**
+
+1. **Scope por proyecto**: Cada memoria tiene `project` y `scope`
+2. **Búsqueda cross-project**: Puedes buscar en todos los proyectos
+3. **Git Sync**: Puedes sincronizar memorias via Git (cada proyecto tiene `.engram/`)
+
+---
+
+## 🏗️ Arquitectura Propuesta para tu Sistema
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    TUS AGENTES DE IA                         │
+│   Codex | Claude | Z.ai | VS Code + Copilot | Cursor        │
+└────────────────────────┬────────────────────────────────────┘
+                         │ MCP (Model Context Protocol)
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│               TU SERVIDOR MCP PERSONAL                       │
+│  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐   │
+│  │ mem_save    │ │ mem_search  │ │ mem_session_summary │   │
+│  │ mem_context │ │ mem_timeline│ │ mem_import_youtube  │   │
+│  └─────────────┘ └─────────────┘ └─────────────────────┘   │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    CAPA DE ALMACENAMIENTO                    │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐    │
+│  │ SQLite + FTS5│ │   Embeddings │ │   Metadatos      │    │
+│  │ (Búsqueda)   │ │ (Semántica)  │ │ (Proyecto, Tags) │    │
+│  └──────────────┘ └──────────────┘ └──────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Tipos de datos a almacenar:
+
+| Tipo | Ejemplo | Cómo se guarda |
+|------|---------|----------------|
+| **Notas** | "Configurar MCP en Next.js" | `mem_save` con tipo `note` |
+| **Soluciones** | "Cómo integrar MCP: pasos..." | `mem_save` con tipo `solution` |
+| **Videos YT** | URL + resumen + transcripción | `mem_save` con tipo `resource` |
+| **Decisiones** | "Usé Prisma por..." | `mem_save` con tipo `decision` |
+| **Errores** | "Error: X, Solución: Y" | `mem_save` con tipo `bugfix` |
+
+---
+
+## 🚀 Recomendación: Empieza con Engram
+
+**Mi sugerencia es que NO reinventes la rueda.** Instala Engram y:
+
+1. **Úsalo durante 2 semanas** para entender el flujo
+2. **Identifica qué te falta** (ej: importar videos de YouTube)
+3. **Extiéndelo** con tus propias herramientas MCP
+
+### Instalación rápida:
+```bash
+# macOS/Linux
+brew install gentleman-programming/tap/engram
+
+# Configurar con tu agente favorito
+engram setup claude-code  # o codex, opencode, etc.
+```
+
+### Lo que te aportaría desarrollar tú mismo:
+- Importar videos de YouTube con resumen automático
+- Integración con Notion/Obsidian
+- Sincronización cloud personalizada
+- UI web personalizada

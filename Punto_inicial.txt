@@ -1,0 +1,392 @@
+# July
+## Documento base del proyecto
+
+Estado: Documento maestro inicial
+Fecha: 2026-03-12
+Enfoque: single-user, local-first, Windows
+
+## 1. Definicion del proyecto
+
+July sera un asistente personal con memoria persistente pensado para capturar, organizar, recuperar y reutilizar conocimiento propio. No sera solo un chat con historial ni una app para guardar notas sueltas. Su objetivo es convertirse en una base de conocimiento viva que conecte notas personales, videos de YouTube, ideas, conversaciones con LLMs, decisiones tecnicas y aprendizajes reutilizables entre proyectos.
+
+La necesidad nace de una situacion concreta: al trabajar con Codex, Claude, Z.AI, VS Code y otros clientes de LLM, parte del conocimiento util se pierde al cerrar una sesion, al cambiar de herramienta o cuando el contexto de la conversacion se comprime. July debe evitar esa perdida y permitir que lo ya aprendido vuelva a aparecer cuando sea relevante.
+
+Ejemplo central:
+si en un proyecto se resolvio de forma costosa como integrar un MCP, July debe poder recordarlo mas adelante en otro proyecto, relacionarlo con el contexto actual y sugerir reutilizar ese aprendizaje.
+
+## 2. Problema que resuelve
+
+July busca resolver cinco problemas principales:
+
+1. El contexto se pierde entre sesiones de trabajo con IA.
+2. El conocimiento tecnico no viaja bien entre proyectos distintos.
+3. Las ideas, notas y recursos personales estan dispersos en varias herramientas.
+4. Los chats largos terminan comprimiendose y pierden parte del conocimiento util.
+5. Las soluciones importantes suelen quedar enterradas en conversaciones, en vez de convertirse en memoria reutilizable.
+
+## 3. Vision
+
+July debe poder responder, con el tiempo, a preguntas como estas:
+
+- "Como resolvi la integracion de MCP en aquel proyecto?"
+- "Que videos o notas guarde sobre IA aplicada a productividad?"
+- "Hace meses ya resolviste algo parecido en otra app; te conviene reutilizar este enfoque."
+- "Esta idea encaja con un proyecto anterior o contradice una decision ya tomada."
+
+La vision no es almacenar todo sin criterio, sino construir una memoria util que mezcle:
+
+- contexto reciente de trabajo,
+- conocimiento destilado,
+- memoria por proyecto,
+- memoria personal transversal.
+
+## 4. Principios del sistema
+
+Los principios que deben guiar July desde el inicio son estos:
+
+1. Local-first. El sistema arrancara en esta maquina y la fuente de verdad vivira localmente.
+2. Single-user. La v1 se disena para una sola persona, no para equipo multiusuario.
+3. Base propia. La memoria canonica vivira en la base de datos de July, no en Google Docs ni en Obsidian.
+4. Memoria semiautomatica. Entrara contenido bruto, se resumira y solo lo importante se destilara como memoria duradera.
+5. Reutilizacion por encima de archivo. July no debe limitarse a guardar; debe ayudar a reaprovechar conocimiento.
+6. Compatibilidad con varios clientes. El conocimiento debe poder ser consumido desde diferentes herramientas mediante MCP y/o API.
+7. Entrada libre. July no dependera de formularios rigidos; aceptara mensajes naturales y los normalizara despues.
+8. Preguntar cuando haya duda. Si no puede clasificar una entrada con suficiente seguridad, debera pedir aclaracion antes de asumir una accion incorrecta.
+9. Evolucion por fases. Primero utilidad real local; despues integraciones externas y automatizaciones.
+
+## 5. Alcance inicial y decisiones cerradas
+
+Quedan fijadas estas decisiones de arranque:
+
+- July empieza para uso personal en esta maquina Windows.
+- El stack inicial sera Python + SQLite.
+- La memoria sera semiautomatica.
+- La base canonica sera la BD propia de July.
+- Telegram y email quedaran planificados como fases posteriores.
+- Obsidian podra integrarse mas adelante, pero no sera el almacenamiento principal de v1.
+- Google Docs no sera la base del sistema.
+
+## 6. Que es July y que no es
+
+### July si es
+
+- un sistema de memoria persistente;
+- un asistente personal orientado a conocimiento;
+- una capa de contexto entre herramientas y conversaciones;
+- una base de conocimiento reutilizable entre proyectos;
+- un sistema que puede recibir notas, ideas, videos, conversaciones y aprendizajes.
+
+### July no es
+
+- un simple chat con historial;
+- un contenedor de conversaciones sin procesar;
+- una wiki manual sin contexto;
+- una app de equipo desde el dia uno;
+- una integracion dependiente de una sola herramienta externa.
+
+## 7. Arquitectura base
+
+Arquitectura objetivo de v1:
+
+canales de captura -> normalizacion y destilado -> SQLite + FTS5 -> recuperacion hibrida -> MCP/API -> clientes y canales
+
+### 7.1 Inbox universal y canales de captura
+
+La primera capa real del sistema sera un inbox universal. Todo lo que llegue desde cualquier canal entrara primero como input bruto, no como memoria final.
+
+Esto permite aceptar entradas como estas:
+
+- "Quiero que me recuerdes ver este link"
+- "He visto un curso y quiero aplicarlo en X proyecto"
+- "Accede a mi memoria y dime como crear una skill"
+- "Revisa este repositorio y ayudame con la arquitectura"
+
+July debera poder recibir informacion desde distintas fuentes. En la primera etapa se priorizara la entrada manual y luego se ampliara.
+
+Fuentes previstas:
+
+- notas manuales;
+- ideas rapidas;
+- resumenes de conversaciones con LLMs;
+- soluciones tecnicas;
+- decisiones de arquitectura;
+- enlaces de YouTube;
+- recursos relevantes;
+- contexto de proyectos.
+
+Conectores futuros:
+
+- Telegram;
+- email;
+- Obsidian;
+- importacion de Markdown;
+- integraciones con herramientas de desarrollo.
+
+### 7.2 Normalizacion y destilado
+
+No se guardara todo como texto plano sin estructura. Cada entrada debera pasar por una capa que:
+
+- conserve el input bruto tal y como entro;
+- conserve el contenido original;
+- genere un resumen limpio;
+- extraiga conocimiento reutilizable;
+- asigne dominio, tipo, alcance y etiquetas;
+- detecte relaciones con proyectos, temas o memorias previas.
+
+Si July detecta varias interpretaciones posibles, debera generar una pregunta de aclaracion y dejar la entrada marcada como pendiente de clasificar del todo.
+
+### 7.3 Almacenamiento
+
+La base de verdad sera una BD SQLite gestionada por July. SQLite se elige por simplicidad, portabilidad, facilidad de backup y buen encaje con un arranque local-first.
+
+Se utilizara FTS5 para busqueda textual rapida.
+
+En fases posteriores se podran anadir embeddings y reranking para mejorar la recuperacion semantica, pero no son requisito del primer arranque.
+
+### 7.4 Recuperacion
+
+La recuperacion no debe ser solo una busqueda por palabras. July debera acabar soportando:
+
+- busqueda textual;
+- filtros por proyecto, dominio, tipo o fecha;
+- recuperacion por contexto de proyecto;
+- sugerencias por relacion con trabajo previo;
+- destilado de contexto para inyectarlo en un LLM sin saturarlo.
+
+### 7.5 Exposicion
+
+July debe exponer su memoria de forma compatible con distintos clientes.
+
+Interfaces previstas:
+
+- MCP server;
+- API local;
+- CLI minima;
+- mas adelante, panel sencillo o TUI.
+
+## 8. Modelo de memoria
+
+July trabajara con dos ejes: tipo de memoria y clase de conocimiento.
+
+### 8.1 Tipos de memoria
+
+- sesion: conocimiento reciente o bruto de una conversacion o bloque de trabajo;
+- proyecto: contexto y aprendizajes ligados a una aplicacion concreta;
+- global: conocimiento personal reutilizable entre proyectos;
+- destilada: conocimiento refinado que merece permanecer a largo plazo.
+
+### 8.2 Clases de conocimiento
+
+- episodica: que ocurrio, donde y en que contexto;
+- semantica: que se sabe de forma mas abstracta;
+- procedimental: como se hace algo paso a paso.
+
+El objetivo es que July no se limite a guardar episodios, sino que convierta parte de ellos en memoria semantica y procedimental.
+
+## 9. Dominios iniciales obligatorios
+
+La memoria de July debera clasificar la informacion, como minimo, en estos cuatro ambitos:
+
+- Inteligencia Artificial
+- Programacion
+- Desarrollo Personal
+- Espiritualidad
+
+Estos dominios son obligatorios desde el principio y deberan reflejarse en el modelo de datos y en la experiencia de recuperacion.
+
+## 10. Entidad base: MemoryItem
+
+Modelo minimo inicial:
+
+MemoryItem
+- id
+- type
+- domain
+- scope
+- title
+- raw_content
+- summary
+- distilled_knowledge
+- source_kind
+- source_ref
+- project_key
+- tags
+- importance
+- confidence
+- created_at
+- updated_at
+
+### 10.1 Tipos iniciales de entrada
+
+- note
+- idea
+- youtube
+- conversation
+- bugfix
+- decision
+- procedure
+- resource
+
+### 10.2 Scope inicial
+
+- global
+- project
+- session
+
+### 10.3 Operaciones previstas del MVP
+
+- save
+- search
+- recall
+- distill
+- link
+- project-context
+- daily-review
+
+## 11. Como se debe guardar la informacion
+
+July no debe guardar solo conversaciones completas. Debe separar varias capas:
+
+1. Inbox or raw input
+   El mensaje original tal y como entro desde terminal, extension, Telegram, email o cualquier otro canal.
+
+2. Summary
+   Un resumen corto, claro y reutilizable.
+
+3. Distilled knowledge
+   El aprendizaje importante que merece quedarse.
+
+4. Metadata
+   Tipo, dominio, scope, proyecto, etiquetas, importancia y fuente.
+
+Esto permite que un mismo item empiece como un input libre, pase por inbox, genere una tarea o una duda de clasificacion y, solo despues, termine convirtiendose en un procedimiento o en una decision reutilizable.
+
+## 12. Ejemplos de uso objetivo
+
+### Caso 1. Reutilizar una solucion tecnica entre proyectos
+
+En un proyecto se resolvio como integrar un MCP. Meses despues, en otra aplicacion, July deberia poder recuperar esa experiencia, resumirla y sugerir reutilizar el mismo enfoque o advertir de errores previos.
+
+### Caso 2. Guardar un video y relacionarlo con trabajo previo
+
+Se envia a July un link de YouTube sobre programacion con IA. July deberia guardar el recurso, resumirlo, clasificarlo dentro del dominio correcto y relacionarlo con proyectos o ideas anteriores donde ese conocimiento pueda aportar valor.
+
+### Caso 3. Sugerir aprendizaje reutilizable
+
+July detecta que una nota nueva sobre metodologias de trabajo encaja con un proyecto pasado y propone aplicar ese aprendizaje o revisar una decision antigua antes de repetir trabajo.
+
+## 13. Referencias externas y posicion adoptada
+
+### Engram
+
+Se toma como referencia fuerte para la parte de memoria persistente y compatibilidad MCP. Su valor principal para July es servir como inspiracion para:
+
+- memoria entre sesiones;
+- integracion con agentes;
+- enfoque de recuperacion local;
+- exposicion via herramientas y protocolo.
+
+### gentle-ai
+
+Se toma como inspiracion de ecosistema. Aporta ideas sobre como combinar memoria, skills, flujo de trabajo y herramientas complementarias, pero no define por si solo el nucleo de July.
+
+### OpenSpec
+
+Se considera util como herramienta opcional para organizar trabajo por proyecto y por cambios concretos. No se usara como memoria global del sistema. Su papel potencial es ayudar a estructurar el contexto de una app o una evolucion de producto, no sustituir la base de conocimiento de July.
+
+### Conclusiones sobre estas referencias
+
+- Engram aporta ideas para memoria y MCP.
+- gentle-ai aporta ideas de ecosistema y flujo.
+- OpenSpec aporta ideas para organizacion de proyectos.
+
+July debe absorber lo util de cada referencia sin quedar atado a una arquitectura pensada para equipo, cloud o despliegue complejo desde el primer dia.
+
+## 14. Roadmap operativo
+
+Estados oficiales del roadmap:
+
+- Por hacer
+- En progreso
+- Finalizado
+- Mejoras
+- Descartado
+
+### Finalizado
+
+- Analisis comparado de ideas y referencias iniciales.
+- Decision de enfoque local-first.
+- Eleccion de Python + SQLite.
+- Decision de memoria semiautomatica.
+- Definicion de dominios iniciales.
+- Reescritura de Punto_inicial.txt como documento maestro del proyecto.
+
+### En progreso
+
+- Priorizacion del primer corte funcional del MVP y del orden de implementacion.
+
+### Por hacer
+
+- Disenar el esquema inicial de SQLite.
+- Crear el servicio base en Python.
+- Crear un MCP server inicial.
+- Crear una CLI minima.
+- Implementar ingestión manual de notas.
+- Implementar ingestión de links de YouTube.
+- Implementar recuperacion por proyecto.
+- Implementar destilado de conversaciones.
+- Crear un panel simple o una TUI.
+- Implementar exportacion y backup.
+
+### Mejoras
+
+- Anadir embeddings y reranking.
+- Generar sugerencias proactivas basadas en contexto.
+- Integrar Telegram.
+- Integrar email.
+- Preparar sincronizacion multi-dispositivo.
+- Crear vista cronologica.
+- Automatizar procesos de consolidacion y revision.
+
+### Descartado
+
+- Usar Google Docs como fuente principal de memoria.
+- Guardar chats completos sin destilar como estrategia central.
+- Disenar la v1 para equipo multiusuario.
+
+## 15. Validacion del documento
+
+Este documento debe servir como brief unico del proyecto. Si se cumple bien, cualquier implementador deberia poder responder, leyendolo una sola vez, a estas preguntas:
+
+- Que es July.
+- Que problema resuelve.
+- Que informacion guarda.
+- Donde la guarda.
+- Como la organiza.
+- Como deberia recuperarse.
+- Que se construye primero.
+- Que queda para fases posteriores.
+
+Ademas, la validacion debe comprobar:
+
+- que la v1 no mezcla enfoque personal con necesidades multi-dispositivo;
+- que Telegram, email, YouTube y Obsidian queden definidos como conectores y no como base de verdad;
+- que los casos de uso clave esten recogidos;
+- que el roadmap sea accionable y tenga estados claros.
+
+## 16. Prioridad real del MVP
+
+El primer MVP no debe intentar resolver todo. Debe centrarse en demostrar cuatro capacidades:
+
+1. Guardar informacion con estructura.
+2. Recuperar conocimiento relevante por proyecto o tema.
+3. Destilar conversaciones o notas en memoria reutilizable.
+4. Servir contexto util a distintos clientes de IA.
+
+Si estas cuatro capacidades funcionan, July ya empezara a resolver el problema real.
+
+## 17. Resumen ejecutivo
+
+July sera una memoria personal persistente para trabajo y conocimiento, nacida para evitar que el contexto util desaparezca entre sesiones, herramientas y proyectos. Su version inicial sera local, personal y pragmaticamente simple: Python + SQLite, memoria semiautomatica, base propia y enfoque claro en reutilizar soluciones, ideas y aprendizajes.
+
+El sistema no arrancara como un second brain disperso ni como una plataforma de equipo. Arrancara como una base de conocimiento personal operativa que mas adelante podra conectarse con Telegram, email, Obsidian, YouTube y otros canales sin perder un principio clave: la memoria canonica vive en July.

@@ -1,0 +1,466 @@
+PROYECTO: CEREBRO PERSONAL CON MEMORIA PERSISTENTE
+Sistema de memoria continua para agentes IA — contexto entre sesiones, proyectos y herramientas
+
+Versión: 1.0
+Estado: Borrador para revisión en equipo
+Fecha: 2026-03-12
+Autores: Pendiente de asignación por equipo
+
+📌 VISIÓN DEL PROYECTO
+Construir un ecosistema personal de IA que nunca olvide: un sistema donde cada conversación, cada solución técnica, cada nota o idea quede almacenada, indexada y disponible para cualquier agente (Claude, Codex, VS Code Copilot, Z.ai...) en cualquier proyecto futuro.
+
+Problema que resuelve:
+
+Los LLMs olvidan todo al cerrar sesión
+Cuando el contexto se comprime, se pierde información crítica
+El conocimiento acumulado en un proyecto no viaja al siguiente
+Las notas, vídeos de YouTube e ideas personales no están accesibles para el agente
+Resultado esperado: Un agente con memoria persistente y búsqueda semántica que, al iniciar cualquier sesión, sepa quién eres, qué has hecho antes y cómo lo resolviste.
+
+🗺️ ARQUITECTURA OBJETIVO
+┌─────────────────────────────────────────────────────────┐
+│                   CAPA DE AGENTES                        │
+│  VS Code Copilot │ Claude Code │ Cursor │ Z.ai │ Codex  │
+└──────────────────────────┬──────────────────────────────┘
+                           │ MCP Protocol (stdio/HTTP)
+┌──────────────────────────▼──────────────────────────────┐
+│               CAPA DE ORQUESTACIÓN (Gentle AI)           │
+│   Memory Protocol │ SDD Workflow │ Context7 MCP          │
+└──────────┬───────────────────────────────────┬──────────┘
+           │                                   │
+┌──────────▼──────────┐             ┌──────────▼──────────┐
+│   MEMORIA TÉCNICA    │             │   MEMORIA PERSONAL   │
+│   Engram (SQLite)    │             │   Obsidian Vault     │
+│   - Bugfixes         │             │   - Notas / Ideas    │
+│   - Decisiones arq.  │             │   - Vídeos YouTube   │
+│   - Patrones código  │             │   - Reflexiones      │
+│   - Sesiones         │             │   - Aprendizajes     │
+└──────────┬──────────┘             └──────────┬──────────┘
+           │                                   │
+┌──────────▼───────────────────────────────────▼──────────┐
+│              CAPA DE ESTRUCTURA DE PROYECTOS             │
+│                  OpenSpec (Markdown local)                │
+│           proposal → specs → design → tasks              │
+└─────────────────────────────────────────────────────────┘
+🧩 STACK TECNOLÓGICO ELEGIDO
+Componente	Herramienta	Función
+Memoria técnica	Engram	SQLite + FTS5 + MCP server
+Orquestación	Gentle AI	Stack completo + Memory Protocol
+Memoria personal	Obsidian + MCP plugin	Notas, ideas, YT links
+Estructura proyectos	OpenSpec	Specs/diseño/tareas en Markdown
+Sincronización cloud	Engram Cloud (Postgres)	Multi-dispositivo / equipo
+Protocolo integración	MCP (Model Context Protocol)	Interfaz universal entre agentes
+📐 FASES DEL PROYECTO
+✅ FASE 0 — CONSENSO Y PREPARACIÓN DEL ENTORNO
+Objetivo: Que todo el equipo llegue al mismo punto de partida
+Duración estimada: 1–2 días
+Hito: Todos con Go instalado, repositorios clonados y decisiones tomadas
+
+Tareas
+ F0.1 — Revisar este documento y anotar comentarios/discrepancias
+ F0.2 — Definir quién es responsable de cada componente
+ F0.3 — Verificar requisitos de sistema en cada máquina:
+Go 1.24+: go version
+Node.js 20.19.0+: node --version
+Git configurado
+ F0.4 — Decidir estrategia de sincronización:
+Opción A: Git Sync (chunks locales en repo) → sin servidor, ideal para empezar
+Opción B: Engram Cloud (Postgres compartido) → requiere servidor, ideal para equipo
+ F0.5 — Definir qué editor/agente usa cada miembro del equipo (VS Code, Claude Code, Cursor...)
+ F0.6 — Crear repositorio compartido del equipo para los chunks de Engram (si se elige Opción A)
+Decisión bloqueante antes de Fase 1
+¿Git Sync o Cloud Sync? Esta decisión afecta toda la arquitectura de sincronización.
+
+🔧 FASE 1 — INSTALACIÓN Y CONFIGURACIÓN DE ENGRAM
+Objetivo: Tener Engram funcionando como MCP server en el agente principal
+Duración estimada: 2–3 horas por miembro
+Hito: El agente guarda y recupera memorias entre sesiones
+
+1.1 — Instalación de Engram
+Copy# Opción A: desde código fuente (requiere Go 1.24+)
+git clone https://github.com/Gentleman-Programming/engram
+cd engram
+go build -o engram ./cmd/engram
+sudo mv engram /usr/local/bin/
+
+# Opción B: binario precompilado (desde releases)
+# https://github.com/Gentleman-Programming/engram/releases
+# Descargar, descomprimir, mover a PATH
+Verificar instalación:
+
+Copyengram version
+engram stats
+1.2 — Configuración como MCP Server
+Engram expone un servidor MCP via stdio. Hay que registrarlo en el agente.
+
+Para Claude Code (~/.claude/mcp.json o equivalente):
+
+Copy{
+  "mcp": {
+    "engram": {
+      "type": "stdio",
+      "command": "engram",
+      "args": ["mcp"]
+    }
+  }
+}
+Para VS Code Copilot (User MCP Settings):
+
+Copy{
+  "mcp": {
+    "engram": {
+      "type": "stdio",
+      "command": "engram",
+      "args": ["mcp"]
+    }
+  }
+}
+Para Cursor (Settings → MCP):
+
+Copy{
+  "mcpServers": {
+    "engram": {
+      "command": "engram",
+      "args": ["mcp"]
+    }
+  }
+}
+⚠️ Nota: Cada agente tiene su ruta de configuración MCP. Verificar la documentación específica de cada uno.
+
+1.3 — Variables de entorno (opcional)
+Copy# En ~/.zshrc o ~/.bashrc
+export ENGRAM_DATA_DIR="$HOME/.engram"
+export ENGRAM_PORT="7437"
+1.4 — Primer test de memoria
+Copy# Guardar una memoria de prueba
+engram save "Test inicial de Engram" "Sistema de memoria instalado correctamente" --type discovery --project test-setup
+
+# Buscarla
+engram search "test inicial"
+
+# Ver TUI
+engram tui
+Criterio de éxito: La búsqueda devuelve la memoria guardada. La TUI muestra 1 sesión, 1 observación.
+
+📝 FASE 2 — MEMORY PROTOCOL: ENSEÑAR AL AGENTE CUÁNDO RECORDAR
+Objetivo: Que el agente sepa automáticamente cuándo guardar y cuándo buscar
+Duración estimada: 1 hora
+Hito: El agente termina cada sesión con un resumen guardado
+
+El Memory Protocol es el prompt de sistema que enseña al agente el comportamiento correcto. Sin él, el agente tiene las herramientas pero no sabe usarlas.
+
+2.1 — Dónde añadir el Memory Protocol
+Agente	Archivo de configuración
+Claude Code	~/.claude/CLAUDE.md
+Cursor	.cursor/rules/memory.mdc (global o por proyecto)
+VS Code Copilot	.github/copilot-instructions.md
+OpenCode	.opencode/AGENT.md
+2.2 — Contenido del Memory Protocol (añadir al prompt de sistema)
+Copy## MEMORY PROTOCOL — REGLAS OBLIGATORIAS
+
+### CUÁNDO GUARDAR (mem_save) — SIEMPRE, no es opcional
+Llama a `mem_save` INMEDIATAMENTE después de cualquiera de estos eventos:
+- Bug resuelto
+- Decisión de arquitectura tomada
+- Descubrimiento no obvio sobre el código
+- Cambio de configuración o setup de entorno
+- Patrón establecido (naming, estructura, convención)
+- Preferencia o restricción del usuario aprendida
+- Integración completada (MCP, API, librería...)
+
+**Formato obligatorio para mem_save:**
+- title: Verbo + qué (ej: "Integrado MCP de Engram en Claude Code")
+- type: bugfix | decision | architecture | discovery | pattern | config | preference
+- scope: project (por defecto) | personal
+- topic_key: clave estable para temas evolutivos (ej: "architecture/auth-model")
+- content:
+  **What**: Una frase — qué se hizo
+  **Why**: Qué lo motivó
+  **Where**: Archivos o rutas afectadas
+  **Learned**: Gotchas, casos edge, sorpresas (omitir si no hay)
+
+### CUÁNDO BUSCAR (mem_search / mem_context)
+Busca en memoria cuando el usuario use palabras como:
+"recuerda", "cómo lo hicimos", "qué hicimos", "acuérdate", "en el otro proyecto"...
+
+1. Primero: `mem_context` — contexto reciente de sesiones anteriores (rápido)
+2. Si no encuentra: `mem_search` con palabras clave relevantes
+3. Si hay match: `mem_get_observation` para contenido completo sin truncar
+
+También busca PROACTIVAMENTE al empezar algo que pueda haber sido resuelto antes.
+
+### PROTOCOLO DE CIERRE DE SESIÓN — OBLIGATORIO
+Antes de terminar una sesión o decir "listo", ejecuta `mem_session_summary` con:
+
+## Goal
+[En qué trabajamos esta sesión]
+
+## Instructions
+[Preferencias o restricciones del usuario — omitir si ninguna]
+
+## Discoveries
+- [Hallazgos técnicos, gotchas, learnings no obvios]
+
+## Accomplished
+- [Items completados con detalles clave]
+
+## Next Steps
+- [Qué queda por hacer en la próxima sesión]
+
+## Relevant Files
+- ruta/al/archivo — [qué hace o qué cambió]
+
+ESTO NO ES OPCIONAL. Si lo omites, la siguiente sesión empieza ciega.
+
+### DESPUÉS DE COMPRESIÓN DE CONTEXTO
+Si ves un mensaje sobre compactación o reset de contexto:
+1. PRIMERO: llama a `mem_session_summary` con el contenido compactado
+2. LUEGO: llama a `mem_context` para recuperar contexto de sesiones previas
+3. SOLO ENTONCES: continúa trabajando
+Copy
+📚 FASE 3 — MEMORIA PERSONAL: OBSIDIAN + MCP
+Objetivo: Que el agente acceda a notas personales, ideas y vídeos de YouTube
+Duración estimada: 2–3 horas
+Hito: El agente puede buscar y crear notas en Obsidian
+
+3.1 — Instalar Obsidian
+Descargar desde obsidian.md. Crear vault en:
+
+~/Documents/Cerebro/
+3.2 — Estructura del vault recomendada
+Cerebro/
+├── 📁 Ideas/
+│   └── [fecha]-idea-nombre.md
+├── 📁 YouTube/
+│   └── [fecha]-titulo-video.md        ← links + resumen
+├── 📁 Proyectos/
+│   └── [nombre-proyecto]/
+│       └── contexto.md
+├── 📁 Aprendizajes/
+│   └── [tema].md                      ← como integrar MCP, etc.
+├── 📁 Recursos/
+│   └── herramientas.md
+└── 📁 _templates/
+    ├── youtube.md
+    ├── idea.md
+    └── aprendizaje.md
+3.3 — Template para vídeos de YouTube
+Copy---
+tipo: youtube
+url: {{URL}}
+fecha: {{date}}
+tags: [youtube, {{tema}}]
+---
+
+# {{titulo}}
+
+## Resumen
+{{resumen en 3-5 frases}}
+
+## Ideas clave
+- 
+- 
+- 
+
+## Citas destacadas
+> 
+
+## Relacionado con
+- [[proyecto]]
+- [[tema]]
+3.4 — Instalar el plugin MCP de Obsidian
+Copy# Opción recomendada: obsidian-mcp-tools (via Community Plugins)
+# Settings → Community Plugins → Browse → "MCP Tools"
+
+# Alternativa: obsidian-mcp-plugin (más técnico)
+# https://github.com/aaronsb/obsidian-mcp-plugin
+3.5 — Registrar Obsidian MCP en los agentes
+Copy{
+  "mcp": {
+    "engram": {
+      "type": "stdio",
+      "command": "engram",
+      "args": ["mcp"]
+    },
+    "obsidian": {
+      "type": "stdio",
+      "command": "obsidian-mcp",
+      "args": ["--vault", "/Users/TU_USUARIO/Documents/Cerebro"]
+    }
+  }
+}
+🏗️ FASE 4 — ESTRUCTURA DE PROYECTOS CON OPENSPEC
+Objetivo: Que cada proyecto tenga especificaciones que el agente entienda
+Duración estimada: 1 hora de setup + 30 min por proyecto
+Hito: Primer proyecto documentado con OpenSpec
+
+4.1 — Instalación de OpenSpec
+Copynpm install -g @fission-ai/openspec@latest
+Verificar:
+
+Copyopenspec --version
+4.2 — Inicializar en un proyecto existente
+Copycd ~/tu-proyecto
+openspec init
+Esto crea:
+
+tu-proyecto/
+└── openspec/
+    ├── specs/          ← fuente de verdad del sistema
+    └── changes/        ← propuestas de cambio activas
+4.3 — Flujo de trabajo por proyecto
+Copy# 1. Proponer un cambio o feature
+/opsx:propose nombre-del-cambio
+
+# 2. Implementar con el agente
+/opsx:apply
+
+# 3. Verificar
+/opsx:verify
+
+# 4. Archivar cuando esté completo
+/opsx:archive
+4.4 — Integración con Engram
+Al completar un proyecto o feature con OpenSpec, guardar manualmente en Engram:
+
+Copyengram save "OpenSpec: [nombre-feature] completado" \
+  "Descripción de qué se hizo y aprendizajes" \
+  --type architecture \
+  --project nombre-proyecto \
+  --scope project
+🔄 FASE 5 — SINCRONIZACIÓN ENTRE DISPOSITIVOS / EQUIPO
+Objetivo: Compartir memorias entre miembros del equipo y dispositivos
+Duración estimada: 2–4 horas según opción elegida
+Hito: Memoria de un miembro accesible para otro
+
+Opción A — Git Sync (sin servidor, recomendado para empezar)
+Configurar repo compartido:
+
+Copy# Cada miembro del equipo, en su directorio de trabajo
+cd ~/proyectos/equipo-cerebro
+
+# Exportar nuevas memorias como chunk
+engram sync
+
+# Esto genera en .engram/chunks/ un archivo .jsonl.gz nuevo
+# Hacer commit y push de ese chunk
+
+git add .engram/
+git commit -m "sync: memorias sesión [fecha]"
+git push
+Importar memorias de otros miembros:
+
+Copygit pull
+engram sync --import
+Automatizar con un alias:
+
+Copy# En ~/.zshrc o ~/.bashrc
+alias brain-sync="engram sync && git add .engram/ && git commit -m 'sync: $(date)' && git push && git pull && engram sync --import"
+Opción B — Engram Cloud (Postgres compartido, para equipo avanzado)
+Setup del servidor (una sola vez, en servidor del equipo):
+
+Copy# docker-compose.yml mínimo
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: engram_cloud
+      POSTGRES_USER: engram
+      POSTGRES_PASSWORD: CAMBIAR_PASSWORD_SEGURA
+    ports:
+      - "5433:5432"
+    volumes:
+      - engram_pg_data:/var/lib/postgresql/data
+
+volumes:
+  engram_pg_data:
+Copydocker compose up -d
+
+export ENGRAM_DATABASE_URL="postgres://engram:PASSWORD@localhost:5433/engram_cloud?sslmode=disable"
+export ENGRAM_JWT_SECRET="secreto-aleatorio-minimo-32-caracteres-CAMBIAR"
+
+engram cloud serve
+Cada miembro del equipo:
+
+Copy# Registrarse una vez
+engram cloud register --server https://tu-servidor-engram.com
+
+# Sincronizar manualmente
+engram cloud sync
+
+# O iniciar servidor local (auto-sync en background)
+engram serve
+Inscribir proyectos para sync selectivo:
+
+Copyengram cloud enroll mi-proyecto-principal
+engram cloud enroll otro-proyecto
+engram cloud projects  # listar proyectos inscritos
+🤖 FASE 6 — ORQUESTACIÓN CON GENTLE AI (OPCIONAL AVANZADO)
+Objetivo: Stack completo preconfigurado para todos los agentes del equipo
+Duración estimada: 2–3 horas
+Hito: Agente con Memory Protocol, Context7 y SDD activados automáticamente
+
+6.1 — Instalación
+Copy# macOS / Linux
+brew install gentle-ai   # si está en Homebrew
+# O desde releases:
+# https://github.com/Gentleman-Programming/gentle-ai/releases
+6.2 — Qué configura automáticamente
+Engram integrado con Memory Protocol inyectado en el prompt de sistema
+Context7 MCP server para documentación en tiempo real de librerías
+SDD (Spec-Driven Development) workflow de planificación antes de código
+Persona de seguridad y permisos mínimos
+Compatibilidad con Claude Code, Cursor, VS Code Copilot, OpenCode
+6.3 — Activar por agente
+Copygentle-ai setup --agent claude-code
+gentle-ai setup --agent cursor
+gentle-ai setup --agent vscode-copilot
+📋 TIPOS DE MEMORIA — GUÍA DE USO
+Esta tabla define qué guardar dónde para mantener coherencia en el equipo:
+
+Tipo	Herramienta	Cuándo usarlo	Ejemplo
+bugfix	Engram	Al resolver un bug no trivial	"Fixed race condition en refresh token JWT"
+architecture	Engram	Al tomar decisión de diseño	"Elegimos Zustand sobre Redux por simplicidad"
+discovery	Engram	Al descubrir algo no documentado	"MCP en Claude Code necesita restart del IDE"
+pattern	Engram	Al establecer una convención	"Naming de hooks: useEntityAction"
+config	Engram	Al configurar entorno/herramienta	"Engram MCP config en VS Code User settings"
+preference	Engram (scope: personal)	Preferencias personales del usuario	"Prefiero tests antes de implementar"
+Nota / Idea	Obsidian	Ideas libres, brainstorming	Nueva idea de feature o negocio
+Vídeo YouTube	Obsidian	Links + resumen de YT relevantes	Tutorial de integración MCP
+Spec técnica	OpenSpec	Antes de desarrollar cualquier feature	proposal.md de nueva funcionalidad
+🔑 COMANDOS MCP DISPONIBLES EN ENGRAM (REFERENCIA)
+Comando	Descripción
+mem_save	Guardar observación estructurada
+mem_search	Buscar en memoria (FTS5 full-text)
+mem_context	Recuperar contexto de sesiones recientes
+mem_get_observation	Contenido completo de una observación por ID
+mem_timeline	Contexto cronológico alrededor de una observación
+mem_session_summary	Resumen completo de sesión (al cerrar)
+mem_session_start	Registrar inicio de sesión
+mem_session_end	Marcar sesión como completada
+mem_update	Actualizar observación existente por ID
+mem_delete	Eliminar observación (soft delete por defecto)
+mem_suggest_topic_key	Sugerir clave estable para topic evolutivo
+mem_save_prompt	Guardar prompt del usuario para contexto futuro
+mem_stats	Estadísticas del sistema de memoria
+⚠️ RIESGOS Y MITIGACIONES
+Riesgo	Probabilidad	Impacto	Mitigación
+Agente no ejecuta Memory Protocol	Alta	Alto	Forzarlo en CLAUDE.md / copilot-instructions.md
+Base de datos SQLite se corrompe	Baja	Alto	engram export periódico como backup
+Ruido en memorias (guardar demasiado)	Media	Medio	Solo guardar lo no obvio. Revisar TUI semanalmente
+Conflictos en Git Sync	Baja	Medio	Chunks son inmutables, el manifest es append-only
+Contexto de Obsidian demasiado grande	Media	Bajo	Usar búsqueda semántica, no inyectar todo el vault
+Credenciales en cloud.json expuestas	Media	Alto	Permisos 0600 (Engram lo hace solo), nunca en git
+🏆 HITOS Y CRITERIOS DE ÉXITO
+Hito	Fase	Criterio medible
+H1: Engram operativo	Fase 1	engram search "test" devuelve resultado
+H2: Memoria entre sesiones	Fase 2	Al iniciar nueva sesión, agente recupera contexto anterior automáticamente
+H3: Notas accesibles	Fase 3	El agente puede leer y crear notas en Obsidian via MCP
+H4: Primer proyecto estructurado	Fase 4	Un proyecto con openspec/ completo (proposal + specs + tasks)
+H5: Sync funcionando	Fase 5	Memoria de miembro A visible para miembro B tras sync
+H6: Stack completo	Fase 6	Gentle AI configurado en todos los agentes del equipo
+📅 CRONOGRAMA ORIENTATIVO
+Semana 1:   F0 (consenso) + F1 (Engram) + F2 (Memory Protocol)
+Semana 2:   F3 (Obsidian) + F4 (OpenSpec en un proyecto piloto)
+Semana 3:   F5 (sincronización equipo)
+Semana 4:   F6 (Gentle AI) + refinamiento + documentación interna

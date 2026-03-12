@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "july"
+version = "0.1.0"
+description = "July local-first memory orchestrator MVP"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+  { name = "Sergi + Codex" }
+]
+dependencies = []
+
+[project.scripts]
+july = "july.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["july*"]
