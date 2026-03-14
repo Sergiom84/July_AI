@@ -14,9 +14,10 @@ from july.pipeline import (
     create_capture_plan,
     enrich_plan_with_proactive_recall,
 )
+from july.project_conversation import PROJECT_ACTIONS, ProjectConversationService
 from july.url_fetcher import fetch_url_metadata
 
-PROTOCOL_VERSION = "2025-03-26"
+PROTOCOL_VERSION = "2026-03-14"
 
 
 @dataclass(slots=True)
@@ -33,6 +34,7 @@ class JulyMCPServer:
         settings = get_settings()
         self.database = JulyDatabase(settings)
         self.llm_provider = create_llm_provider(settings.llm)
+        self.project_service = ProjectConversationService(self.database)
         self.initialized = False
         self.tools = self._build_tools()
 
@@ -84,6 +86,76 @@ class JulyMCPServer:
                     "required": ["project_key"],
                 },
                 handler=self.tool_project_context,
+            ),
+            "project_entry": ToolSpec(
+                name="project_entry",
+                title="Project Entry",
+                description="Return the conversational opening state for a repository: project state, summary, greeting, and options.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"type": "string", "description": "Optional path inside the repository."},
+                        "project_key": {"type": "string", "description": "Optional explicit project key override."},
+                        "limit": {"type": "integer", "description": "Maximum amount of context to inspect."},
+                    },
+                },
+                handler=self.tool_project_entry,
+            ),
+            "project_onboard": ToolSpec(
+                name="project_onboard",
+                title="Project Onboard",
+                description="Run a read-only onboarding snapshot for a project and persist it using July sessions and memory.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "repo_path": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "session_key": {"type": "string"},
+                        "agent_name": {"type": "string"},
+                        "goal": {"type": "string"},
+                    },
+                },
+                handler=self.tool_project_onboard,
+            ),
+            "conversation_checkpoint": ToolSpec(
+                name="conversation_checkpoint",
+                title="Conversation Checkpoint",
+                description="Classify a conversational finding as store_directly, ask_user, or ignore, and optionally persist it. ask_user responses include a pending_confirmation payload for the agent.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Candidate finding, decision, or reusable note."},
+                        "repo_path": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "persist": {"type": "boolean", "description": "Persist the checkpoint when it is safe to do so."},
+                        "source": {"type": "string"},
+                        "source_ref": {"type": "string"},
+                        "model_name": {"type": "string"},
+                    },
+                    "required": ["text"],
+                },
+                handler=self.tool_conversation_checkpoint,
+            ),
+            "project_action": ToolSpec(
+                name="project_action",
+                title="Project Action",
+                description="Execute a project action based on user's choice from project_entry. Actions: analyze_now, resume_context, refresh_context, continue_without_context, close_stale_and_continue.",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "action": {
+                            "type": "string",
+                            "enum": list(PROJECT_ACTIONS),
+                            "description": "Action to execute: analyze_now, resume_context, refresh_context, continue_without_context, close_stale_and_continue",
+                        },
+                        "repo_path": {"type": "string"},
+                        "project_key": {"type": "string"},
+                        "agent_name": {"type": "string"},
+                        "goal": {"type": "string"},
+                    },
+                    "required": ["action"],
+                },
+                handler=self.tool_project_action,
             ),
             "list_inbox": ToolSpec(
                 name="list_inbox",
@@ -331,9 +403,10 @@ class JulyMCPServer:
                 {
                     "protocolVersion": PROTOCOL_VERSION,
                     "capabilities": {"tools": {"listChanged": False}},
-                    "serverInfo": {"name": "July", "version": "0.2.0"},
+                    "serverInfo": {"name": "July", "version": "0.5.0"},
                     "instructions": (
-                        "July exposes memory capture, search, sessions, topic keys, "
+                        "July exposes memory capture, project entry and onboarding, "
+                        "conversation checkpoints, search, sessions, topic keys, "
                         "model traceability, URL fetching, external references, "
                         "proactive recall, and project context tools."
                     ),
@@ -469,6 +542,43 @@ class JulyMCPServer:
         project_key = require_string(arguments, "project_key")
         limit = int(arguments.get("limit", 10))
         return rows_to_dicts(self.database.project_context(project_key, limit=limit))
+
+    def tool_project_entry(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        limit = int(arguments.get("limit", 5))
+        return self.project_service.project_entry(
+            repo_path=arguments.get("repo_path"),
+            project_key=arguments.get("project_key"),
+            limit=limit,
+        )
+
+    def tool_project_onboard(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.project_onboard(
+            repo_path=arguments.get("repo_path"),
+            project_key=arguments.get("project_key"),
+            session_key=arguments.get("session_key"),
+            agent_name=arguments.get("agent_name", "mcp"),
+            goal=arguments.get("goal"),
+        )
+
+    def tool_conversation_checkpoint(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.conversation_checkpoint(
+            require_string(arguments, "text"),
+            repo_path=arguments.get("repo_path"),
+            project_key=arguments.get("project_key"),
+            source=arguments.get("source", "mcp_checkpoint"),
+            source_ref=arguments.get("source_ref"),
+            persist=bool(arguments.get("persist", False)),
+            model_name=arguments.get("model_name"),
+        )
+
+    def tool_project_action(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self.project_service.project_action(
+            action=require_string(arguments, "action"),
+            repo_path=arguments.get("repo_path"),
+            project_key=arguments.get("project_key"),
+            agent_name=arguments.get("agent_name", "mcp"),
+            goal=arguments.get("goal"),
+        )
 
     def tool_list_inbox(self, arguments: dict[str, Any]) -> dict[str, Any]:
         limit = int(arguments.get("limit", 20))

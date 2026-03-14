@@ -156,3 +156,7 @@ Cuando July sugiera consultar una referencia externa (skills.sh, agents.md), el 
 | `fetch_url` | Extraer metadatos de una URL |
 | `fetch_reference` | Consultar fuente de referencia externa |
 | `proactive_recall` | Buscar proactivamente en memoria |
+| `project_entry` | Detectar si un proyecto es nuevo, parcial o conocido y proponer el siguiente paso |
+| `project_onboard` | Hacer onboarding read-only del repo y guardar una primera foto util en July |
+| `conversation_checkpoint` | Clasificar hallazgos durante la iteracion como guardables, ambiguos o ignorables; si devuelve `ask_user`, expone `pending_confirmation` para confirmar y persistir |
+| `project_action` | Ejecutar la accion elegida tras `project_entry` (`analyze_now`, `resume_context`, `refresh_context`, `continue_without_context`, `close_stale_and_continue`) |
