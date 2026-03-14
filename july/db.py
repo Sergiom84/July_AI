@@ -686,13 +686,12 @@ class JulyDatabase:
                 """
                 UPDATE sessions
                 SET summary = ?, discoveries = ?, accomplished = ?,
-                    next_steps = ?, relevant_files = ?, status = 'summarized',
-                    ended_at = ?
+                    next_steps = ?, relevant_files = ?, status = 'summarized'
                 WHERE session_key = ?
                 """,
-                (summary, discoveries, accomplished, next_steps, relevant_files, timestamp, session_key),
+                (summary, discoveries, accomplished, next_steps, relevant_files, session_key),
             )
-        return {"session_key": session_key, "status": "summarized", "ended_at": timestamp}
+        return {"session_key": session_key, "status": "summarized", "summarized_at": timestamp}
 
     def session_end(self, session_key: str) -> dict:
         timestamp = utc_now()
@@ -702,12 +701,27 @@ class JulyDatabase:
             ).fetchone()
             if row is None:
                 raise ValueError(f"Session '{session_key}' not found")
-            new_status = "closed" if row["summary"] else "closed_without_summary"
             conn.execute(
-                "UPDATE sessions SET status = ?, ended_at = COALESCE(ended_at, ?) WHERE session_key = ?",
-                (new_status, timestamp, session_key),
+                """
+                UPDATE sessions
+                SET status = CASE
+                        WHEN summary IS NOT NULL AND TRIM(summary) <> '' THEN 'closed'
+                        ELSE 'closed_without_summary'
+                    END,
+                    ended_at = COALESCE(ended_at, ?)
+                WHERE session_key = ?
+                """,
+                (timestamp, session_key),
             )
-        return {"session_key": session_key, "status": new_status, "ended_at": timestamp}
+            updated = conn.execute(
+                "SELECT status, ended_at FROM sessions WHERE session_key = ?",
+                (session_key,),
+            ).fetchone()
+        return {
+            "session_key": session_key,
+            "status": updated["status"],
+            "ended_at": updated["ended_at"],
+        }
 
     def session_context(self, project_key: str | None = None, limit: int = 5) -> list[dict]:
         with self.connection() as conn:

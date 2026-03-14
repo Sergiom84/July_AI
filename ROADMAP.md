@@ -26,31 +26,73 @@ Lo que ya existe hoy en el codigo:
 - Extraccion de metadatos de URLs: titulo, descripcion, tipo de contenido. Manejo especial de YouTube (video id, canal, duracion).
 - Trazabilidad de modelos: registrar contribuciones de cualquier IA, marcar como adoptadas, comparar propuestas.
 - Referencias externas: July sugiere consultar skills.sh y agents.md cuando detecta inputs que se beneficiarian de una skill o un patron de agente.
-- 19 herramientas MCP (antes 6).
-- 28 comandos CLI (antes 11).
+- 17 herramientas MCP (antes 6).
+- 27 comandos CLI (antes 11).
 - 12 tablas en la base de datos (antes 6).
+- Runtime oficial: Python `3.11+`. En Windows, si `python` apunta a `3.10`, hay que usar `py -3.11` o cualquier `3.11+` disponible.
+- Flujo de arranque recomendado en Windows: `.\scripts\bootstrap.ps1` para crear `.venv` y `.\scripts\july.ps1` para ejecutar July con el runtime del proyecto.
+- Lanzador dedicado de MCP en Windows: `.\scripts\mcp.ps1` y `.\start-july-mcp.cmd`.
 
 Estado resumido:
 
 - Implementado: nucleo local-first del orquestador + protocolo de sesion + topic keys + proactive recall + URL metadata + model traceability + external references.
+- Documentado y validado manualmente: protocolo operativo por proyecto (`PROJECT_PROTOCOL.md`) con distincion entre proyecto nuevo, proyecto conocido, iteracion, cierre, reglas de guardado y Fase 1/Fase 2.
 - Parcial: uso de LLM para refinado de clasificacion y memoria (funcional pero requiere API key).
-- Pendiente: conectores externos, embeddings, sugerencias proactivas avanzadas.
+- Pendiente: automatizar la capa conversacional orientada a proyectos, onboarding automatico de repos, consolidacion de progreso entre iteraciones y conectores externos.
+
+## Prioridad de producto aclarada
+
+July no se orienta a que el usuario final "pique comandos" para acordarse de todo. La direccion del producto es esta:
+
+- July se conecta a un proyecto;
+- entiende donde esta y si ese contexto ya existe;
+- propone onboarding o revision si el repo es nuevo;
+- registra avances, decisiones, errores resueltos y mejoras de flujo durante la iteracion;
+- recupera ese conocimiento en conversaciones futuras para evitar repetir trabajo.
+
+El objetivo practico de esa memoria es triple:
+
+1. Saber en que punto esta un proyecto.
+2. Saber que se ha hecho y que queda por hacer.
+3. Evitar dar pasos atras o rehacer en cada iteracion lo que ya se resolvio antes.
+
+## Protocolo por proyecto ya definido
+
+El contrato operativo ya no esta solo en conversaciones temporales. Queda fijado en `PROJECT_PROTOCOL.md`.
+
+Ese protocolo deja cerrado:
+
+- como distinguir proyecto nuevo frente a proyecto conocido;
+- como actuar durante la iteracion;
+- como cerrar una sesion sin perder contexto;
+- que debe guardarse, que debe preguntarse y que no debe persistirse;
+- como encajan Fase 1 y Fase 2.
+
+Primer caso real usado para validacion manual:
+
+- `Vocabulario`, tratado como proyecto conocido con contexto previo en inbox/memoria pero sin sesiones consolidadas.
 
 ## Siguiente bloque logico
 
-1. Embeddings y reranking.
+1. Automatizar el protocolo de comportamiento por proyecto ya definido.
+   Convertir `PROJECT_PROTOCOL.md` en comportamiento reproducible del agente usando las primitivas actuales de July.
+
+2. Onboarding conversacional del repositorio.
+   Hacer que July pueda proponer "quieres que revise este proyecto?" y guardar una primera foto util del repo, su arquitectura y su estado.
+
+3. Registro de avance y anti-regresion.
+   Consolidar decisiones, errores resueltos, pendientes y mejoras de flujo para que el proyecto pueda retomarse sin repetir analisis.
+
+4. UX conversacional para almacenamiento.
+   Preguntas tipo "quieres que lo guarde?", "quieres que esto quede como referencia?" y reglas para guardar automaticamente cuando la senal sea clara.
+
+5. Embeddings y reranking.
    Anadir busqueda semantica ademas de FTS5 para mejorar la recuperacion cuando las palabras no coinciden literalmente.
 
-2. Sugerencias proactivas avanzadas.
-   Que July no solo encuentre memorias por keywords, sino que detecte patrones: "llevas 3 proyectos usando el mismo stack, quieres convertirlo en una plantilla?"
-
-3. Consolidacion automatica.
-   Un comando `daily-review` o `consolidate` que revise el inbox, promueva memorias candidatas y sugiera cerrar sesiones abiertas.
-
-4. Conectores de entrada.
+6. Conectores de entrada.
    Telegram, email, importacion de Markdown y Obsidian como fuentes de captura.
 
-5. Panel simple o TUI.
+7. Panel simple o TUI.
    Interfaz visual para inspeccionar memoria, sesiones, topics y contribuciones sin usar solo CLI.
 
 ## Aporte de Engram
@@ -72,7 +114,7 @@ Lo mas valioso de Engram para July, ya absorbido en v0.2:
 - Session summary -> implementado con session-summary.
 - Context recovery -> implementado con session-context y proactive recall.
 - Topic hygiene -> implementado con topic_key.
-- Memoria como infraestructura reusable entre herramientas -> implementado via MCP con 19 herramientas.
+- Memoria como infraestructura reusable entre herramientas -> implementado via MCP con 17 herramientas.
 
 ## Aporte de Genspark
 
@@ -137,6 +179,17 @@ Lo que se tomo de valor:
 
 GPT se toma como la referencia externa que mas refuerza la direccion de July como orquestador y memoria viva.
 
+## Aporte de Codex
+
+En esta sesion de marzo de 2026, Codex empujo una distincion importante que se adopta como direccion oficial:
+
+- July ya tiene una base de memoria y orquestacion util;
+- lo siguiente no es hacer mas comandos, sino construir la capa de comportamiento conversacional sobre esa base;
+- CLI y MCP deben entenderse como infraestructura;
+- la UX objetivo debe sentirse como un agente que entiende el proyecto, sugiere revision, guarda avances utiles y ayuda a no repetir trabajo entre iteraciones.
+
+Este aporte no sustituye la vision de July: la refuerza con una prioridad concreta para el siguiente bloque.
+
 ## Aporte de Genspark (sesion v0.2)
 
 En la sesion de implementacion de v0.2, Genspark aporto:
@@ -147,8 +200,8 @@ En la sesion de implementacion de v0.2, Genspark aporto:
 - extraccion de metadatos de URLs con manejo especial de YouTube;
 - trazabilidad de contribuciones de modelos;
 - integracion de referencias externas (skills.sh, agents.md) como puntos de apoyo;
-- ampliacion del MCP server de 6 a 19 herramientas;
-- ampliacion de la CLI de 11 a 28 comandos.
+- ampliacion del MCP server de 6 a 17 herramientas;
+- ampliacion de la CLI de 11 a 27 comandos.
 
 ## Coincidencias
 
@@ -171,10 +224,11 @@ Secuencia concreta, actualizada tras v0.2:
 3. ~~Incorporar topic_key para agrupar conocimiento.~~ Completado.
 4. ~~Anadir recuperacion proactiva.~~ Completado.
 5. ~~Anadir trazabilidad de modelos.~~ Completado.
-6. Mejorar la recuperacion con embeddings y reranking.
-7. Anadir consolidacion automatica y daily review.
-8. Expandir canales (Telegram, email, Obsidian).
-9. Evaluar integraciones mayores (OpenSpec, backends mas sofisticados).
+6. ~~Construir el protocolo de comportamiento por proyecto.~~ Completado a nivel documental y validado manualmente con Vocabulario.
+7. Anadir onboarding conversacional y registro de avance anti-regresion como comportamiento automatizado.
+8. Mejorar la recuperacion con embeddings y reranking.
+9. Expandir canales (Telegram, email, Obsidian).
+10. Evaluar integraciones mayores (OpenSpec, backends mas sofisticados).
 
 ## Backlog posterior
 
@@ -183,6 +237,9 @@ Bloques que quedan para despues:
 - embeddings y reranking para recuperacion semantica;
 - sugerencias proactivas avanzadas (deteccion de patrones repetidos);
 - consolidacion automatica (daily review);
+- onboarding conversacional de nuevos proyectos;
+- registro estructurado de progreso por proyecto e iteracion;
+- reglas de guardado conversacional y confirmacion al usuario;
 - relaciones explicitas entre memorias;
 - timeline de contexto;
 - Telegram como canal de entrada;

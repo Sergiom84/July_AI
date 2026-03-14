@@ -7,9 +7,19 @@ Antes de actuar en este proyecto, cualquier agente, IA, CLI o automatizacion deb
 1. `README.md`
 2. `ROADMAP.md`
 3. `AGENTS.md`
-4. Los archivos especificos del area que vaya a modificar
+4. `PROJECT_PROTOCOL.md` cuando la tarea afecte comportamiento dentro de proyectos o integraciones reales
+5. Los archivos especificos del area que vaya a modificar
 
 No se debe asumir que el chat actual sustituye a estos documentos.
+
+## Regla de runtime
+
+July requiere Python `3.11` o superior.
+
+En Windows es valido tener varias versiones de Python instaladas a la vez. Si `python` apunta a `3.10` u otra version no compatible, el agente debe usar `py -3.11` o cualquier `3.11+` disponible en ese equipo.
+
+Cuando el repo tenga `.venv`, el agente debe preferir `.\scripts\july.ps1 ...` o `.\.venv\Scripts\python.exe -m july ...` frente a `python -m july`.
+Para iniciar MCP en Windows, debe preferir `.\scripts\mcp.ps1` o `.\start-july-mcp.cmd`.
 
 ## Regla de actualizacion documental
 
@@ -45,6 +55,7 @@ No se debe sobrescribir la vision de July con propuestas externas tipo Engram, G
 - July tiene inbox universal;
 - July combina memoria, tareas, contexto, sesiones, topic keys y comparacion entre modelos;
 - July tiene recuperacion proactiva y sugerencias de referencias externas;
+- July debe comportarse como una capa conversacional orientada a proyectos, no como una UX basada en comandos para el usuario final;
 - July no arranca como una replica literal de Engram ni como un stack de equipo.
 
 ## Regla de consistencia
@@ -73,6 +84,39 @@ Cualquier agente que trabaje sobre July debe:
 
 Esto no es opcional. Sin ello, la siguiente sesion empieza ciega.
 
+## Regla de comportamiento en proyectos
+
+Cuando July este conectado a otro proyecto o repo, el agente debe comportarse asi:
+
+El contrato operativo exacto esta en `PROJECT_PROTOCOL.md`.
+
+Resumen obligatorio:
+
+1. Detectar el proyecto actual y consultar primero `project-context` y `session-context`.
+2. Distinguir entre proyecto nuevo y proyecto conocido segun la utilidad real del contexto previo, no solo por la existencia de un item aislado.
+3. Si el proyecto es nuevo, proponer onboarding o revision inicial y dejar una primera foto util del repo.
+4. Si el proyecto es conocido, recuperar contexto antes de pedir al usuario que repita informacion y evitar rehacer onboarding si no hace falta.
+5. Durante la iteracion, registrar errores resueltos, decisiones, mejoras de flujo y hallazgos reutilizables.
+6. Si un dato es claramente util y durable, puede capturarlo directamente; si hay ambiguedad, debe preguntar al usuario si quiere guardarlo.
+7. Al cerrar, debe dejar claro que se hizo, que queda pendiente y que conviene reutilizar en futuras iteraciones.
+
+La finalidad es evitar regresiones de contexto:
+
+- saber en que punto esta el proyecto;
+- saber que se ha hecho y que falta;
+- no repetir en futuras iteraciones el mismo analisis o las mismas soluciones.
+
+## Regla de UX
+
+CLI y MCP son infraestructura. El agente no debe empujar al usuario a memorizar comandos salvo que este depurando July o trabajando explicitamente sobre la herramienta.
+
+La experiencia preferida es conversacional:
+
+- "Estoy en un proyecto nuevo, quieres que lo revise?"
+- "Este proyecto ya tiene contexto en July, te resumo por donde va?"
+- "He encontrado una decision reutilizable, quieres que la guarde?"
+- "Esto puede servir en otra sesion, quieres que quede registrado?"
+
 ## Regla de topic keys
 
 Cuando un agente detecte que un tema se repite entre sesiones o proyectos (por ejemplo "autenticacion JWT", "integracion MCP", "estructura de proyecto"), debe:
@@ -89,7 +133,7 @@ Cuando July sugiera consultar una referencia externa (skills.sh, agents.md), el 
 1. Considerar la sugerencia.
 2. Si la referencia es util, puede usar `fetch-reference` para obtener contenido.
 3. Crear su propia implementacion basada en la referencia, no copiar literalmente.
-4. Registrar la referencia con `save_external_reference` si aporta valor al proyecto.
+4. Si la referencia cambia arquitectura, prioridades, flujo MCP o vision, reflejar ese aprendizaje en `ROADMAP.md` y mantener `README.md` alineado.
 
 ## Herramientas MCP disponibles
 

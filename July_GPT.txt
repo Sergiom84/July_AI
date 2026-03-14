@@ -494,3 +494,15 @@ Yo empezaría así:
 Eso te da algo muchísimo más útil que “un chat con historial”.
 
 
+ACTUALIZACION DE RECONCILIACION CON LA DIRECCION ACTUAL DE JULY (2026-03-13)
+
+Esta referencia sigue siendo util, pero debe leerse junto con una aclaracion importante de producto:
+
+- July no debe sentirse como una CLI de comandos para el usuario final.
+- CLI y MCP son infraestructura; la experiencia objetivo debe ser conversacional.
+- Cuando July se conecte a un proyecto, debe entender el contexto, proponer revision u onboarding y empezar a registrar avances utiles.
+- Lo importante no es solo guardar memoria, sino dejar trazado en que punto esta el proyecto, que se ha hecho y que queda por hacer.
+- Esa memoria debe reducir regresiones: evitar repetir analisis, errores o decisiones ya resueltas en iteraciones anteriores.
+- Durante la iteracion, July debe poder preguntar de forma natural si algo merece guardarse o reutilizarse en otra sesion o proyecto.
+
+Por tanto, el siguiente salto de July no es solo mejorar la recuperacion, sino construir la capa de comportamiento del agente sobre la base de memoria ya implementada.

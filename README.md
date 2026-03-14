@@ -1,6 +1,6 @@
 # July
 
-July es un orquestador local-first con memoria persistente. Su funcion no es solo guardar entradas libres, sino capturarlas, clasificarlas, convertirlas en tareas o memoria util, relacionarlas entre proyectos y servir contexto reutilizable a distintos agentes y clientes.
+July es un orquestador local-first con memoria persistente. Su funcion no es solo guardar entradas libres, sino entender en que proyecto o conversacion esta trabajando, capturar avances, relacionarlos entre proyectos y servir contexto reutilizable a distintos agentes y clientes para no repetir trabajo ni dar pasos atras entre iteraciones.
 
 ## Lectura obligatoria para agentes
 
@@ -9,7 +9,8 @@ Antes de actuar sobre este proyecto, cualquier agente, CLI o modelo debe leer en
 1. `README.md`
 2. `ROADMAP.md`
 3. `AGENTS.md`
-4. Los archivos especificos del area que vaya a tocar
+4. `PROJECT_PROTOCOL.md` cuando la tarea toque comportamiento dentro de proyectos o integraciones reales
+5. Los archivos especificos del area que vaya a tocar
 
 Ningun agente debe asumir que el chat actual sustituye a estos documentos.
 
@@ -22,6 +23,59 @@ La regla es simple:
 - `README.md` mantiene la vision y la guia operativa corta.
 - `ROADMAP.md` mantiene el estado vivo del proyecto.
 - `AGENTS.md` obliga a leer y mantener ambos.
+
+## Requisitos de entorno
+
+- July requiere Python `3.11` o superior.
+- En Windows puedes tener varias versiones de Python instaladas en el mismo equipo sin problema.
+- Si `python --version` apunta a `3.10` u otra version antigua, usa el launcher de Windows con un Python compatible: `py -3.11 -m july ...` o cualquier `3.11+` disponible, por ejemplo `py -3.13 -m july ...`.
+- Los ejemplos de este README usan `python -m july` asumiendo que ya estas dentro de un entorno virtual correcto o que `python` apunta a un runtime `3.11+`.
+
+### Flujo recomendado en Windows
+
+Para evitar mezclar el Python global del equipo con el de July:
+
+```powershell
+.\scripts\bootstrap.ps1
+.\scripts\july.ps1 stats
+```
+
+`bootstrap.ps1` crea `.venv`, actualiza `pip` e instala July en modo editable.  
+Si no le pasas una version, intenta usar `3.13`, `3.12` y luego `3.11`.
+`july.ps1` ejecuta siempre July con el Python del proyecto.
+
+Accesos directos incluidos:
+
+- `.\scripts\july.ps1 <comando>` para cualquier comando de July.
+- `.\scripts\mcp.ps1` para arrancar el servidor MCP.
+- `.\start-july-mcp.cmd` para arrancar MCP sin recordar comandos de Python o PowerShell.
+
+Si necesitas forzar otra version concreta instalada en tu maquina:
+
+```powershell
+.\scripts\bootstrap.ps1 -PythonVersion 3.11
+.\scripts\bootstrap.ps1 -PythonVersion 3.13
+```
+
+## Intencion del proyecto
+
+July no debe sentirse como "otra CLI para guardar notas". Debe sentirse como una capa de memoria y orquestacion que acompana el trabajo real dentro de cualquier proyecto conectado.
+
+Objetivo operativo:
+
+- saber en que punto esta un proyecto;
+- saber que se ha hecho y que queda por hacer;
+- evitar repetir en iteraciones futuras errores, decisiones o analisis ya resueltos;
+- conservar contexto util entre conversaciones, herramientas y sesiones.
+
+Experiencia objetivo:
+
+- cuando July se conecta a un proyecto nuevo, debe proponer una revision u onboarding del repositorio;
+- durante la iteracion, debe detectar hallazgos utiles, errores resueltos y mejoras de flujo de trabajo;
+- cuando algo merece persistir, debe poder preguntarlo de forma natural: "quieres que lo guarde?", "quieres que esto quede como referencia para otro momento?";
+- al volver a conversar despues, debe recuperar contexto previo del proyecto sin obligar al usuario a empezar de cero.
+
+Importante: esta es la experiencia objetivo del producto. El codigo actual ya implementa la base de memoria, sesiones, trazabilidad y MCP, pero la capa conversacional automatica todavia esta en construccion.
 
 ## Que implementa este corte
 
@@ -47,14 +101,24 @@ La regla es simple:
 - Extraccion de metadatos de URLs: titulo, descripcion, tipo de contenido. Manejo especial de YouTube (video id, canal, duracion).
 - Trazabilidad de modelos: registrar contribuciones de Claude, GPT, Z.AI, Codex, Perplexity, Genspark u otros. Marcar como adoptadas o no.
 - Referencias externas: July sugiere consultar skills.sh y agents.md cuando detecta que un input podria beneficiarse de una skill o un patron de agente.
-- 19 herramientas MCP expuestas (antes 6).
-- 28 comandos CLI (antes 11).
+- 17 herramientas MCP expuestas (antes 6).
+- 27 comandos CLI (antes 11).
 
 ## Modelo operativo
 
 Pipeline actual:
 
 `input libre -> extraer urls/rutas/proyecto -> clasificar -> recall proactivo -> guardar inbox -> crear tarea/memoria candidata -> fetch URL metadata -> sugerir referencias externas -> recuperar`
+
+Flujo objetivo sobre ese pipeline:
+
+`proyecto nuevo -> detectar contexto -> ofrecer onboarding/revision -> iterar -> registrar avances y decisiones -> resumir estado -> recuperar contexto en la siguiente conversacion`
+
+Principio de UX:
+
+- MCP y CLI son infraestructura;
+- la experiencia deseada para el usuario es conversacional;
+- el agente debe usar July por detras para recordar, sugerir y consolidar, no obligar al usuario a memorizar comandos.
 
 Tipos de intencion iniciales:
 
@@ -67,145 +131,153 @@ Tipos de intencion iniciales:
 - `architecture_collaboration`
 - `general_note`
 
-## Uso rapido
+## Uso rapido de la infraestructura actual
+
+Los comandos de abajo son utiles para probar July, depurarlo o usarlo manualmente. No representan la UX final deseada del producto. La UX objetivo es que el agente haga este trabajo por detras y lo exponga en forma de preguntas y sugerencias naturales.
 
 ### 1. Capturar una entrada libre
 
 ```powershell
-python -m july capture "Quiero que me recuerdes ver este link: https://youtu.be/91BGGKlQrho"
+.\scripts\july.ps1 capture "Quiero que me recuerdes ver este link: https://youtu.be/91BGGKlQrho"
 ```
 
 ```powershell
-python -m july capture "He visto un curso que quiero aplicar en Lucy3000 = https://www.youtube.com/live/V-eiE0M-mWM" --fetch-urls
+.\scripts\july.ps1 capture "He visto un curso que quiero aplicar en Lucy3000 = https://www.youtube.com/live/V-eiE0M-mWM" --fetch-urls
 ```
 
 ```powershell
-python -m july capture "Accede a C:\Users\sergi\Desktop\Aplicaciones\Vocabulario, comprueba los accesos" --model-name claude
+.\scripts\july.ps1 capture "Accede a C:\Users\sergi\Desktop\Aplicaciones\Vocabulario, comprueba los accesos" --model-name claude
 ```
 
 ### 2. Ver el inbox
 
 ```powershell
-python -m july inbox
+.\scripts\july.ps1 inbox
 ```
 
 ### 3. Resolver una aclaracion
 
 ```powershell
-python -m july clarify 3 "Quiero una auditoria tecnica completa"
+.\scripts\july.ps1 clarify 3 "Quiero una auditoria tecnica completa"
 ```
 
 ### 4. Ver tareas pendientes
 
 ```powershell
-python -m july tasks
+.\scripts\july.ps1 tasks
 ```
 
 ### 5. Ver memoria candidata o lista
 
 ```powershell
-python -m july memory
+.\scripts\july.ps1 memory
 ```
 
 ### 6. Promover una memoria candidata
 
 ```powershell
-python -m july promote-memory 1
+.\scripts\july.ps1 promote-memory 1
 ```
 
 ### 7. Ver contexto agrupado por proyecto
 
 ```powershell
-python -m july project-context Vocabulario
+.\scripts\july.ps1 project-context Vocabulario
 ```
 
 ### 8. Buscar contexto
 
 ```powershell
-python -m july search skill
-python -m july search MCP
-python -m july search Lucy3000
+.\scripts\july.ps1 search skill
+.\scripts\july.ps1 search MCP
+.\scripts\july.ps1 search Lucy3000
 ```
 
 ### 9. Probar una clasificacion sin guardar
 
 ```powershell
-python -m july capture "Quiero montar JWT en Vocabulario" --dry-run
+.\scripts\july.ps1 capture "Quiero montar JWT en Vocabulario" --dry-run
 ```
 
 ### 10. Protocolo de sesion
 
 ```powershell
 # Iniciar sesion
-python -m july session-start "ses-001" --project Lucy3000 --agent claude --goal "Implementar JWT"
+.\scripts\july.ps1 session-start "ses-001" --project Lucy3000 --agent claude --goal "Implementar JWT"
 
 # Guardar resumen antes de cerrar
-python -m july session-summary "ses-001" "Implementamos JWT con refresh tokens" --discoveries "httpOnly cookie obligatoria" --next-steps "Proteger rutas privadas"
+.\scripts\july.ps1 session-summary "ses-001" "Implementamos JWT con refresh tokens" --discoveries "httpOnly cookie obligatoria" --next-steps "Proteger rutas privadas"
 
 # Cerrar sesion
-python -m july session-end "ses-001"
+.\scripts\july.ps1 session-end "ses-001"
 
 # Recuperar contexto de sesiones recientes
-python -m july session-context --project Lucy3000
+.\scripts\july.ps1 session-context --project Lucy3000
 
 # Listar sesiones
-python -m july sessions
+.\scripts\july.ps1 sessions
 ```
 
 ### 11. Hilos tematicos (topic keys)
 
 ```powershell
 # Crear un tema
-python -m july topic-create "auth/jwt-flow" "Autenticacion JWT" --domain Programacion --description "Todo sobre JWT y refresh tokens"
+.\scripts\july.ps1 topic-create "auth/jwt-flow" "Autenticacion JWT" --domain Programacion --description "Todo sobre JWT y refresh tokens"
 
 # Enlazar items al tema
-python -m july topic-link "auth/jwt-flow" --memory-item-id 1
-python -m july topic-link "auth/jwt-flow" --session-id 1
+.\scripts\july.ps1 topic-link "auth/jwt-flow" --memory-item-id 1
+.\scripts\july.ps1 topic-link "auth/jwt-flow" --session-id 1
 
 # Ver todo lo vinculado a un tema
-python -m july topic-context "auth/jwt-flow"
+.\scripts\july.ps1 topic-context "auth/jwt-flow"
 
 # Listar temas
-python -m july topics
+.\scripts\july.ps1 topics
 ```
 
 ### 12. Trazabilidad de modelos
 
 ```powershell
 # Registrar una contribucion
-python -m july model-contribution "claude" "architecture" "Propuesta JWT" "Usar refresh tokens en httpOnly cookies" --project Vocabulario
+.\scripts\july.ps1 model-contribution "claude" "architecture" "Propuesta JWT" "Usar refresh tokens en httpOnly cookies" --project Vocabulario
 
 # Listar contribuciones
-python -m july model-contributions --project Vocabulario
+.\scripts\july.ps1 model-contributions --project Vocabulario
 
 # Marcar como adoptada
-python -m july adopt-contribution 1 --notes "Adoptada por experiencia previa en Lucy3000"
+.\scripts\july.ps1 adopt-contribution 1 --notes "Adoptada por experiencia previa en Lucy3000"
 ```
 
 ### 13. Fetch de URLs
 
 ```powershell
-python -m july fetch-url "https://github.com/Gentleman-Programming/engram"
+.\scripts\july.ps1 fetch-url "https://github.com/Gentleman-Programming/engram"
 ```
 
 ### 14. Referencias externas
 
 ```powershell
 # Consultar una fuente de referencia conocida
-python -m july fetch-reference skills.sh
-python -m july fetch-reference agents.md
+.\scripts\july.ps1 fetch-reference skills.sh
+.\scripts\july.ps1 fetch-reference agents.md
 
 # Ver referencias almacenadas
-python -m july external-references
+.\scripts\july.ps1 external-references
 ```
 
 ### 15. Lanzar el servidor MCP
 
 ```powershell
-python -m july mcp
+.\scripts\mcp.ps1
 ```
 
-Herramientas MCP expuestas actualmente:
+O directamente:
+
+```powershell
+.\start-july-mcp.cmd
+```
+
+Herramientas MCP expuestas actualmente (`17`):
 
 - `capture_input` (con proactive recall, fetch URLs, model traceability)
 - `search_context`
@@ -231,8 +303,8 @@ Ejemplo de configuracion MCP por stdio:
 {
   "mcpServers": {
     "july": {
-      "command": "python",
-      "args": ["-m", "july", "mcp"],
+      "command": "cmd",
+      "args": ["/c", "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July\\start-july-mcp.cmd"],
       "cwd": "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July"
     }
   }
@@ -325,6 +397,21 @@ Cada vez que se captura una nueva entrada, July busca automaticamente en su memo
 
 Esto convierte a July en un sistema que **recuerda por ti y te avisa cuando algo es relevante**, no solo un almacen pasivo.
 
+## Modo de trabajo esperado en un proyecto
+
+El contrato operativo exacto vive en `PROJECT_PROTOCOL.md`.
+
+Resumen corto del comportamiento esperado:
+
+1. Detectar primero si el proyecto es nuevo o ya conocido usando `project-context`, `session-context` y la documentacion real del repo.
+2. Si es nuevo, proponer onboarding o revision y guardar una primera foto util del proyecto.
+3. Si es conocido, recuperar contexto antes de pedir al usuario que repita informacion y evitar rehacer onboarding sin necesidad.
+4. Durante la iteracion, guardar solo conocimiento durable y reutilizable; si hay ambiguedad, preguntar.
+5. Al cerrar, dejar una sesion resumida con hecho, pendiente y siguiente paso.
+6. Fase 1 significa que el agente lee el repo y July actua como memoria; Fase 2, si hace falta, permitira lectura controlada y read-only por parte de July.
+
+Eso permite que July sirva como memoria anti-regresion: no solo guarda, sino que reduce trabajo repetido y ayuda a retomar donde se dejo el proyecto.
+
 ## Referencias externas como punto de apoyo
 
 July puede sugerir consultar fuentes externas cuando detecta que un input se beneficiaria de ellas:
@@ -345,11 +432,14 @@ Estas sugerencias son puntos de referencia. July toma la idea, la revisa, y crea
 - Al capturar, July busca proactivamente en memoria y sugiere reutilizar conocimiento previo.
 - Las sesiones permiten consolidar el conocimiento de un bloque de trabajo.
 - Los topic keys permiten agrupar conocimiento disperso bajo un mismo hilo.
+- El protocolo por proyecto ya esta definido a nivel documental en `PROJECT_PROTOCOL.md`.
+- El estado actual sigue siendo backend-first: la base de memoria existe y el protocolo ya esta trazado, pero la capa de comportamiento conversacional por proyecto todavia no esta automatizada por completo.
 
 ## Contrato publico del proyecto
 
 - `README.md` es la vision y la guia operativa corta.
 - `ROADMAP.md` es el estado vivo y la direccion del proyecto.
 - `AGENTS.md` es la instruccion obligatoria para cualquier agente o CLI que contribuya.
+- `PROJECT_PROTOCOL.md` fija el contrato operativo exacto de July dentro de proyectos conectados.
 
-Estos tres archivos deben mantenerse alineados.
+Estos cuatro archivos deben mantenerse alineados.
