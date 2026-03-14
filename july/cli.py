@@ -10,6 +10,7 @@ from july.db import JulyDatabase
 from july.external_refs import fetch_reference_page
 from july.llm import LLMProviderError, create_llm_provider
 from july.mcp import main as mcp_main
+from july.project_conversation import PROJECT_ACTIONS, ProjectConversationService
 from july.pipeline import (
     apply_classification_overrides,
     create_capture_plan,
@@ -62,6 +63,34 @@ def build_parser() -> argparse.ArgumentParser:
     project_context = subparsers.add_parser("project-context", help="Show inbox/tasks/memory for a project key")
     project_context.add_argument("project_key")
     project_context.add_argument("--limit", type=int, default=10)
+
+    project_entry = subparsers.add_parser("project-entry", help="Return the conversational opening for a project")
+    project_entry.add_argument("--repo-path", default=None, help="Path inside the repository to inspect")
+    project_entry.add_argument("--project-key", default=None, help="Override the derived project key")
+    project_entry.add_argument("--limit", type=int, default=5)
+
+    project_onboard = subparsers.add_parser("project-onboard", help="Run a read-only onboarding snapshot for a project")
+    project_onboard.add_argument("--repo-path", default=None, help="Path inside the repository to inspect")
+    project_onboard.add_argument("--project-key", default=None, help="Override the derived project key")
+    project_onboard.add_argument("--session-key", default=None, help="Explicit session key to use")
+    project_onboard.add_argument("--agent", default="cli", help="Agent or client name")
+    project_onboard.add_argument("--goal", default=None, help="Goal to register in the onboarding session")
+
+    checkpoint = subparsers.add_parser("conversation-checkpoint", help="Classify a reusable project checkpoint and optionally persist it")
+    checkpoint.add_argument("text", nargs="?", help="Candidate finding or note. If omitted, stdin is used.")
+    checkpoint.add_argument("--repo-path", default=None, help="Path inside the repository to inspect")
+    checkpoint.add_argument("--project-key", default=None, help="Override the derived project key")
+    checkpoint.add_argument("--persist", action="store_true", help="Store the checkpoint when it is clearly reusable")
+    checkpoint.add_argument("--source", default="cli_checkpoint", help="Source channel for persisted checkpoints")
+    checkpoint.add_argument("--source-ref", default=None, help="Optional external source reference")
+    checkpoint.add_argument("--model-name", default=None, help="Optional model name for traceability")
+
+    project_action = subparsers.add_parser("project-action", help="Execute a project action (analyze_now, resume_context, refresh_context, continue_without_context, close_stale_and_continue)")
+    project_action.add_argument("action", choices=PROJECT_ACTIONS, help="Action to execute")
+    project_action.add_argument("--repo-path", default=None, help="Path inside the repository to inspect")
+    project_action.add_argument("--project-key", default=None, help="Override the derived project key")
+    project_action.add_argument("--agent", default="cli", help="Agent or client name")
+    project_action.add_argument("--goal", default=None, help="Goal for the session")
 
     search = subparsers.add_parser("search", help="Search inbox, tasks, and memory")
     search.add_argument("query")
@@ -171,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     database = JulyDatabase(settings)
     llm_provider = create_llm_provider(settings.llm)
+    project_service = ProjectConversationService(database)
 
     try:
         if args.command == "mcp":
@@ -278,6 +308,53 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{section}]")
                 print_rows(rows)
                 print()
+            return 0
+
+        if args.command == "project-entry":
+            result = project_service.project_entry(
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                limit=args.limit,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "project-onboard":
+            result = project_service.project_onboard(
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                session_key=args.session_key,
+                agent_name=args.agent,
+                goal=args.goal,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "conversation-checkpoint":
+            raw_input = args.text if args.text is not None else sys.stdin.read().strip()
+            if not raw_input:
+                parser.error("conversation-checkpoint requires text or stdin input")
+            result = project_service.conversation_checkpoint(
+                raw_input,
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                source=args.source,
+                source_ref=args.source_ref,
+                persist=args.persist,
+                model_name=args.model_name,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "project-action":
+            result = project_service.project_action(
+                action=args.action,
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                agent_name=args.agent,
+                goal=args.goal,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
             return 0
 
         if args.command == "search":

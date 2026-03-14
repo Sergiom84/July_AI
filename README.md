@@ -75,7 +75,7 @@ Experiencia objetivo:
 - cuando algo merece persistir, debe poder preguntarlo de forma natural: "quieres que lo guarde?", "quieres que esto quede como referencia para otro momento?";
 - al volver a conversar despues, debe recuperar contexto previo del proyecto sin obligar al usuario a empezar de cero.
 
-Importante: esta es la experiencia objetivo del producto. El codigo actual ya implementa la base de memoria, sesiones, trazabilidad y MCP, pero la capa conversacional automatica todavia esta en construccion.
+Importante: esta es la experiencia objetivo del producto. El codigo actual ya implementa la base de memoria, sesiones, trazabilidad y MCP, y ya incluye un primer corte automatizado de capa conversacional por proyecto. Aun queda trabajo para hacerla mas rica y menos heuristica.
 
 ## Que implementa este corte
 
@@ -103,6 +103,36 @@ Importante: esta es la experiencia objetivo del producto. El codigo actual ya im
 - Referencias externas: July sugiere consultar skills.sh y agents.md cuando detecta que un input podria beneficiarse de una skill o un patron de agente.
 - 17 herramientas MCP expuestas (antes 6).
 - 27 comandos CLI (antes 11).
+
+### Nuevo en v0.3
+
+- Capa conversacional de proyecto v1 implementada sobre las primitivas actuales, sin cambiar el esquema SQLite.
+- Nuevo servicio interno compartido para detectar estado del proyecto (`new`, `partial`, `known`), abrir la conversacion correcta y decidir si un hallazgo debe guardarse, preguntarse o ignorarse.
+- Onboarding read-only automatizado con `project-entry` y `project-onboard`, guardando el snapshot inicial en la BD de July como memoria + sesion resumida.
+- Nuevo `conversation-checkpoint` para clasificar y, si procede, persistir hallazgos reutilizables durante la iteracion.
+- Prioridad MCP-first con paridad minima en CLI para depuracion y terminal.
+- 20 herramientas MCP expuestas.
+- 30 comandos CLI.
+
+### Nuevo en v0.4
+
+- **Staleness detection**: Los proyectos `known` se degradan automaticamente a `partial` si la ultima sesion es antigua (>30 dias por defecto).
+- **Enriched recall**: `project_entry` usa contenido real del proyecto (memoria, sesiones, tareas, README) para busqueda cross-project, no solo el nombre del proyecto.
+- **High-confidence checkpoints**: Errores resueltos y decisiones sustanciales se guardan automaticamente sin preguntar.
+- **Confirmation flow**: `persist=True` permite al agente confirmar con el usuario y forzar el guardado de hallazgos ambiguos.
+- **project_action**: Unico punto de entrada para ejecutar acciones post-entry (`analyze_now`, `resume_context`, `refresh_context`, `continue_without_context`).
+- **Session hygiene inicial**: `project_entry` detecta sesiones abiertas sin cerrar, avisa si alguna parece abandonada (>24h) y `resume_context` reutiliza la sesion abierta mas reciente en lugar de duplicarla por defecto.
+- **Contrato alineado**: Las opciones devueltas por `project_entry` siempre corresponden a acciones reales soportadas por `project_action`.
+- 21 herramientas MCP expuestas.
+- 31 comandos CLI.
+
+### Nuevo en v0.5
+
+- **Session resolution**: `project_action` incorpora `close_stale_and_continue` para cerrar sesiones abiertas/abandonadas antes de iniciar una nueva.
+- **Refresh con diff estructurado**: `refresh_context` compara stack, comandos, integraciones, entrypoints y dudas abiertas contra el ultimo onboarding guardado, no solo contra la longitud del resumen.
+- **pending_confirmation**: `conversation_checkpoint` devuelve una estructura de confirmacion reutilizable cuando clasifica un hallazgo como `ask_user`.
+- **active_session_warning**: `project_entry` expone una advertencia explicita cuando detecta sesiones sin cerrar y recomienda cierre directo si alguna parece abandonada.
+- **Version alineada**: `pyproject.toml` y el servidor MCP quedan en `0.5.0`.
 
 ## Modelo operativo
 
@@ -277,11 +307,75 @@ O directamente:
 .\start-july-mcp.cmd
 ```
 
-Herramientas MCP expuestas actualmente (`17`):
+### 16. Abrir la conversacion de proyecto
+
+```powershell
+.\scripts\july.ps1 project-entry --repo-path C:\Users\sergi\Desktop\Aplicaciones\July
+```
+
+Esto devuelve:
+
+- `project_key`
+- estado del proyecto: `new`, `partial`, `known`
+- saludo, resumen de contexto y opciones de apertura conversacional
+- sesiones activas sin cerrar, si existen, y aviso cuando alguna parece abandonada
+- `active_session_warning` cuando conviene retomar o cerrar una sesion previa antes de abrir otra
+
+### 17. Hacer onboarding read-only del repo
+
+```powershell
+.\scripts\july.ps1 project-onboard --repo-path C:\Users\sergi\Desktop\Aplicaciones\July --agent codex
+```
+
+Esto:
+
+- detecta la raiz del repo y deriva `project_key`;
+- lee de forma acotada `README*`, `AGENTS.md`, manifests y entrypoints visibles;
+- guarda un snapshot inicial del proyecto en la BD de July;
+- crea `session-start`, `session-summary` y `session-end` automaticamente.
+
+### 18. Clasificar un hallazgo de iteracion
+
+```powershell
+.\scripts\july.ps1 conversation-checkpoint "Decidimos usar MCP porque evita duplicar logica y simplifica la integracion con clientes." --project-key July --persist
+```
+
+Esto devuelve una de estas acciones:
+
+- `store_directly`
+- `ask_user`
+- `ignore`
+
+Si se usa `--persist` y la senal es clara, July lo guarda como memoria reutilizable del proyecto actual.
+Si devuelve `ask_user`, ahora incluye `pending_confirmation` para que el agente pueda preguntar al usuario y, si confirma, relanzar el mismo checkpoint con `persist=True`.
+
+### 19. Ejecutar una accion de proyecto (evolucionado en v0.5)
+
+```powershell
+.\scripts\july.ps1 project-action analyze_now --project-key July
+.\scripts\july.ps1 project-action resume_context --project-key July
+.\scripts\july.ps1 project-action refresh_context --project-key July
+.\scripts\july.ps1 project-action continue_without_context --project-key July
+.\scripts\july.ps1 project-action close_stale_and_continue --project-key July
+```
+
+Acciones disponibles:
+
+- `analyze_now`: Ejecuta onboarding completo del proyecto (delega a `project_onboard`).
+- `resume_context`: Recupera contexto previo (sesiones, memorias, tareas) y reutiliza la sesion abierta mas reciente si ya habia una sin cerrar.
+- `refresh_context`: Analiza el estado actual del repo y lo compara de forma estructurada con el ultimo snapshot de onboarding disponible.
+- `continue_without_context`: Inicia sesion sin recuperar contexto previo.
+- `close_stale_and_continue`: Cierra sesiones abiertas previas y arranca una nueva sesion con contexto recuperado.
+
+Herramientas MCP expuestas actualmente (`21`):
 
 - `capture_input` (con proactive recall, fetch URLs, model traceability)
 - `search_context`
 - `project_context`
+- `project_entry`
+- `project_onboard`
+- `project_action` (nuevo en v0.4)
+- `conversation_checkpoint`
 - `list_inbox`
 - `clarify_input`
 - `promote_memory`
@@ -433,7 +527,7 @@ Estas sugerencias son puntos de referencia. July toma la idea, la revisa, y crea
 - Las sesiones permiten consolidar el conocimiento de un bloque de trabajo.
 - Los topic keys permiten agrupar conocimiento disperso bajo un mismo hilo.
 - El protocolo por proyecto ya esta definido a nivel documental en `PROJECT_PROTOCOL.md`.
-- El estado actual sigue siendo backend-first: la base de memoria existe y el protocolo ya esta trazado, pero la capa de comportamiento conversacional por proyecto todavia no esta automatizada por completo.
+- El estado actual ya no es solo backend-first: July tiene un primer corte de comportamiento conversacional por proyecto, aunque todavia faltan heuristicas mas ricas, mejores sugerencias y conectores adicionales.
 
 ## Contrato publico del proyecto
 

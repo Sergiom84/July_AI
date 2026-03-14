@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from july.config import LLMSettings, Settings
@@ -63,6 +64,33 @@ class SessionLifecycleTests(unittest.TestCase):
         self.assertEqual(result["status"], "closed_without_summary")
         self.assertEqual(row["status"], "closed_without_summary")
         self.assertIsNotNone(row["ended_at"])
+
+    def test_find_active_sessions_marks_abandoned_open_sessions(self) -> None:
+        self.database.session_start("ses-open", project_key="DemoRepo")
+        self.database.session_summary("ses-open", summary="Resumen intermedio")
+        old_timestamp = (datetime.now(UTC) - timedelta(hours=30)).isoformat()
+
+        with self.database.connection() as conn:
+            conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE session_key = ?",
+                (old_timestamp, "ses-open"),
+            )
+
+        active_sessions = self.database.find_active_sessions(project_key="DemoRepo", abandoned_after_hours=24)
+
+        self.assertEqual(len(active_sessions), 1)
+        self.assertEqual(active_sessions[0]["session_key"], "ses-open")
+        self.assertEqual(active_sessions[0]["status"], "summarized")
+        self.assertTrue(active_sessions[0]["is_abandoned"])
+        self.assertTrue(active_sessions[0]["needs_closure"])
+
+    def test_find_active_sessions_excludes_closed_sessions(self) -> None:
+        self.database.session_start("ses-close-me", project_key="DemoRepo")
+        self.database.session_end("ses-close-me")
+
+        active_sessions = self.database.find_active_sessions(project_key="DemoRepo")
+
+        self.assertEqual(active_sessions, [])
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from pathlib import Path
 
 from july.config import Settings
 
+OPEN_SESSION_STATUSES = ("active", "summarized")
+
 
 SCHEMA_SQL = """
 PRAGMA foreign_keys = ON;
@@ -422,6 +424,31 @@ class JulyDatabase:
             ).fetchall()
         return {"inbox": inbox_rows, "tasks": task_rows, "memory": memory_rows}
 
+    def latest_project_onboarding(self, project_key: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    inbox_items.id AS inbox_item_id,
+                    inbox_items.raw_input,
+                    inbox_items.normalized_summary,
+                    inbox_items.created_at,
+                    inbox_items.source_ref,
+                    memory_items.id AS memory_item_id,
+                    memory_items.title AS memory_title,
+                    memory_items.summary AS memory_summary,
+                    memory_items.distilled_knowledge
+                FROM inbox_items
+                LEFT JOIN memory_items ON memory_items.inbox_item_id = inbox_items.id
+                WHERE inbox_items.project_key = ?
+                  AND inbox_items.source_channel = 'project_onboard'
+                ORDER BY inbox_items.id DESC
+                LIMIT 1
+                """,
+                (project_key,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def _insert_task(self, conn: sqlite3.Connection, inbox_item_id: int, task: dict | None, timestamp: str) -> int | None:
         if not task:
             return None
@@ -747,6 +774,50 @@ class JulyDatabase:
                     (limit,),
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    def find_active_sessions(
+        self,
+        project_key: str | None = None,
+        limit: int = 5,
+        *,
+        abandoned_after_hours: int = 24,
+    ) -> list[dict]:
+        query = """
+            SELECT id, session_key, project_key, agent_name, goal, status,
+                   summary, discoveries, next_steps, started_at, ended_at
+            FROM sessions
+            WHERE ended_at IS NULL
+              AND status IN ('active', 'summarized')
+        """
+        params: list[object] = []
+        if project_key:
+            query += " AND project_key = ?"
+            params.append(project_key)
+        query += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+
+        with self.connection() as conn:
+            rows = conn.execute(query, tuple(params)).fetchall()
+
+        now = datetime.now(UTC)
+        active_sessions: list[dict] = []
+        for row in rows:
+            session = dict(row)
+            started_at = session.get("started_at")
+            age_hours: float | None = None
+            is_abandoned = False
+            if started_at:
+                try:
+                    started_dt = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
+                    age_hours = round((now - started_dt).total_seconds() / 3600, 1)
+                    is_abandoned = age_hours >= abandoned_after_hours
+                except ValueError:
+                    age_hours = None
+            session["age_hours"] = age_hours
+            session["is_abandoned"] = is_abandoned
+            session["needs_closure"] = session.get("status") in OPEN_SESSION_STATUSES
+            active_sessions.append(session)
+        return active_sessions
 
     def list_sessions(self, status: str | None = None, limit: int = 20) -> list[sqlite3.Row]:
         query = """

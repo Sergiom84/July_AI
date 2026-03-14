@@ -33,12 +33,46 @@ Lo que ya existe hoy en el codigo:
 - Flujo de arranque recomendado en Windows: `.\scripts\bootstrap.ps1` para crear `.venv` y `.\scripts\july.ps1` para ejecutar July con el runtime del proyecto.
 - Lanzador dedicado de MCP en Windows: `.\scripts\mcp.ps1` y `.\start-july-mcp.cmd`.
 
+### Bloque v0.3 (implementado)
+
+- Primer corte automatizado de capa conversacional por proyecto, sin cambios de esquema en SQLite.
+- Nuevo servicio interno compartido para detectar estado del proyecto (`new`, `partial`, `known`) y abrir la conversacion correcta.
+- Nuevo `project-entry` en CLI/MCP para devolver saludo, resumen de contexto y opciones de apertura.
+- Nuevo `project-onboard` en CLI/MCP para hacer onboarding read-only del repo y guardar un snapshot inicial en memoria + sesion.
+- Nuevo `conversation-checkpoint` en CLI/MCP para clasificar hallazgos como `store_directly`, `ask_user` o `ignore`, con persistencia opcional.
+- Lectura acotada del repo: `README*`, `AGENTS.md`, manifests y entrypoints visibles.
+- 20 herramientas MCP (antes 17).
+- 30 comandos CLI (antes 27).
+
+### Bloque v0.4 (implementado)
+
+- **Staleness detection**: Los proyectos `known` se degradan automaticamente a `partial` si la ultima sesion es antigua (>30 dias por defecto). Funcion `detect_context_staleness()`.
+- **Enriched recall**: `project_entry` usa contenido real del proyecto (memoria, sesiones, tareas, README) para busqueda cross-project, no solo el nombre del proyecto. Funcion `build_recall_query()`.
+- **High-confidence checkpoints**: Errores resueltos y decisiones sustanciales se guardan automaticamente sin preguntar. Funcion `_is_high_confidence_checkpoint()`.
+- **Confirmation flow**: `persist=True` permite al agente confirmar con el usuario y forzar el guardado de hallazgos ambiguos (action `ask_user`), pero nunca ignora datos sensibles (action `ignore`).
+- **project_action**: Unico punto de entrada para ejecutar acciones post-entry (`analyze_now`, `resume_context`, `refresh_context`, `continue_without_context`).
+- **Session hygiene inicial**: `find_active_sessions()` detecta sesiones abiertas sin cerrar, `project_entry` las expone y avisa si alguna parece abandonada (>24h).
+- **Reanudacion segura**: `resume_context` reutiliza la sesion abierta mas reciente cuando existe, en lugar de abrir otra sesion por defecto.
+- **Contrato alineado**: `project_entry` ya no devuelve opciones que `project_action` no pueda ejecutar.
+- 21 herramientas MCP (antes 20).
+- 31 comandos CLI (antes 30).
+
+### Bloque v0.5 (implementado)
+
+- **Session resolution**: `project_action` anade `close_stale_and_continue` para cerrar sesiones abiertas/abandonadas y arrancar una nueva sesion con contexto recuperado.
+- **Refresh con diff estructurado**: `refresh_context` compara el analisis actual contra el ultimo onboarding guardado usando stack, comandos, integraciones, entrypoints y dudas abiertas. Funciones `latest_project_onboarding()`, `parse_onboarding_snapshot()` y `compare_repository_analysis()`.
+- **Confirmation payload**: `conversation_checkpoint` devuelve `pending_confirmation` cuando la accion es `ask_user`, de modo que el agente tenga una forma estable de preguntar y persistir despues.
+- **active_session_warning**: `project_entry` expone una advertencia explicita cuando detecta sesiones sin cerrar y recomienda cierre directo si alguna parece abandonada.
+- **Version alineada**: runtime/documentacion/servidor MCP actualizados a `0.5.0`.
+- 21 herramientas MCP (sin cambios de cantidad).
+- 31 comandos CLI (sin cambios de cantidad).
+
 Estado resumido:
 
-- Implementado: nucleo local-first del orquestador + protocolo de sesion + topic keys + proactive recall + URL metadata + model traceability + external references.
+- Implementado: nucleo local-first del orquestador + protocolo de sesion + topic keys + proactive recall + URL metadata + model traceability + external references + capa conversacional por proyecto (v0.3) + staleness detection + enriched recall + high-confidence checkpoints + confirmation flow + project_action (v0.4) + resolucion inicial de sesiones abandonadas + refresh contextual con diff estructurado + pending_confirmation (v0.5).
 - Documentado y validado manualmente: protocolo operativo por proyecto (`PROJECT_PROTOCOL.md`) con distincion entre proyecto nuevo, proyecto conocido, iteracion, cierre, reglas de guardado y Fase 1/Fase 2.
 - Parcial: uso de LLM para refinado de clasificacion y memoria (funcional pero requiere API key).
-- Pendiente: automatizar la capa conversacional orientada a proyectos, onboarding automatico de repos, consolidacion de progreso entre iteraciones y conectores externos.
+- Pendiente: embeddings y reranking para busqueda semantica, conectores de entrada, politicas mas finas de continuidad/cierre automatico.
 
 ## Prioridad de producto aclarada
 
@@ -72,27 +106,21 @@ Primer caso real usado para validacion manual:
 
 - `Vocabulario`, tratado como proyecto conocido con contexto previo en inbox/memoria pero sin sesiones consolidadas.
 
-## Siguiente bloque logico
+## Siguiente bloque logico (v0.6+)
 
-1. Automatizar el protocolo de comportamiento por proyecto ya definido.
-   Convertir `PROJECT_PROTOCOL.md` en comportamiento reproducible del agente usando las primitivas actuales de July.
+1. ~~Refinar la capa conversacional de proyecto ya implementada.~~ **Hecho en v0.4**.
+   Staleness detection, enriched recall, high-confidence checkpoints, confirmation flow, project_action.
 
-2. Onboarding conversacional del repositorio.
-   Hacer que July pueda proponer "quieres que revise este proyecto?" y guardar una primera foto util del repo, su arquitectura y su estado.
+2. Continuidad conversacional mas fuerte.
+   Ya existe deteccion/cierre inicial de sesiones abiertas, pero falta decidir politicas mas finas: autocierre con resumen minimo, resolucion de carreras entre `session-summary` y `session-end`, y mejor recuperacion del ultimo siguiente paso util cuando la sesion mas reciente sigue activa.
 
-3. Registro de avance y anti-regresion.
-   Consolidar decisiones, errores resueltos, pendientes y mejoras de flujo para que el proyecto pueda retomarse sin repetir analisis.
-
-4. UX conversacional para almacenamiento.
-   Preguntas tipo "quieres que lo guarde?", "quieres que esto quede como referencia?" y reglas para guardar automaticamente cuando la senal sea clara.
-
-5. Embeddings y reranking.
+3. Embeddings y reranking.
    Anadir busqueda semantica ademas de FTS5 para mejorar la recuperacion cuando las palabras no coinciden literalmente.
 
-6. Conectores de entrada.
+4. Conectores de entrada.
    Telegram, email, importacion de Markdown y Obsidian como fuentes de captura.
 
-7. Panel simple o TUI.
+5. Panel simple o TUI.
    Interfaz visual para inspeccionar memoria, sesiones, topics y contribuciones sin usar solo CLI.
 
 ## Aporte de Engram
@@ -190,6 +218,25 @@ En esta sesion de marzo de 2026, Codex empujo una distincion importante que se a
 
 Este aporte no sustituye la vision de July: la refuerza con una prioridad concreta para el siguiente bloque.
 
+## Aporte de Codex (sesion v0.3)
+
+En la sesion de implementacion de v0.3, Codex aporto e implemento:
+
+- un servicio interno compartido para `project-entry`, `project-onboard` y `conversation-checkpoint`;
+- automatizacion inicial del protocolo de proyecto usando solo primitivas existentes de July;
+- onboarding read-only que guarda snapshot interno en memoria + sesion, sin crear archivos en repos externos por defecto;
+- primer criterio operativo para distinguir `new`, `partial` y `known` basado en utilidad real del contexto, no en un contador fijo;
+- decision explicita de dejar fuera Roo Code, embeddings y cambios de esquema en este corte.
+
+## Aporte de Codex (sesion v0.5)
+
+En la sesion de integracion de v0.5, Codex aporto e implemento:
+
+- cierre explicito del bucle conversacional cuando hay sesiones abiertas o abandonadas, mediante `close_stale_and_continue`;
+- comparacion estructurada entre el estado actual del repo y el ultimo onboarding guardado para que `refresh_context` sea util de verdad;
+- un contrato estable de `pending_confirmation` para que los agentes puedan confirmar y persistir checkpoints ambiguos sin inventarse flujo propio;
+- ajuste de continuidad para reutilizar la sesion activa tambien en `refresh_context` y reducir sesiones duplicadas durante la misma iteracion.
+
 ## Aporte de Genspark (sesion v0.2)
 
 En la sesion de implementacion de v0.2, Genspark aporto:
@@ -217,7 +264,7 @@ Las visiones de Engram, Genspark, Z.AI y GPT coinciden en un nucleo comun:
 
 ## Propuesta unificada para July
 
-Secuencia concreta, actualizada tras v0.2:
+Secuencia concreta, actualizada tras v0.3:
 
 1. ~~Mantener el nucleo actual de July.~~ Completado.
 2. ~~Incorporar protocolo de sesion inspirado en Engram.~~ Completado.
@@ -225,7 +272,7 @@ Secuencia concreta, actualizada tras v0.2:
 4. ~~Anadir recuperacion proactiva.~~ Completado.
 5. ~~Anadir trazabilidad de modelos.~~ Completado.
 6. ~~Construir el protocolo de comportamiento por proyecto.~~ Completado a nivel documental y validado manualmente con Vocabulario.
-7. Anadir onboarding conversacional y registro de avance anti-regresion como comportamiento automatizado.
+7. ~~Anadir onboarding conversacional y primer registro de avance anti-regresion como comportamiento automatizado.~~ Completado en un primer corte con `project-entry`, `project-onboard` y `conversation-checkpoint`.
 8. Mejorar la recuperacion con embeddings y reranking.
 9. Expandir canales (Telegram, email, Obsidian).
 10. Evaluar integraciones mayores (OpenSpec, backends mas sofisticados).
@@ -237,9 +284,9 @@ Bloques que quedan para despues:
 - embeddings y reranking para recuperacion semantica;
 - sugerencias proactivas avanzadas (deteccion de patrones repetidos);
 - consolidacion automatica (daily review);
-- onboarding conversacional de nuevos proyectos;
-- registro estructurado de progreso por proyecto e iteracion;
-- reglas de guardado conversacional y confirmacion al usuario;
+- refinamiento del onboarding conversacional de nuevos proyectos;
+- registro estructurado mas profundo de progreso por proyecto e iteracion;
+- reglas de guardado conversacional y confirmacion al usuario mas finas;
 - relaciones explicitas entre memorias;
 - timeline de contexto;
 - Telegram como canal de entrada;
