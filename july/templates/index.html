@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+
+{% block title %}July Cockpit{% endblock %}
+
+{% block content %}
+  <section class="panel hero">
+    <div class="section-title">Entrada</div>
+    <div class="hero-head">
+      <div>
+        <h2>Abrir una consola de proyecto</h2>
+        <p>
+          La pantalla principal de cada proyecto debe empezar por el contexto disponible, no por una pared de formularios.
+          Desde aqui puedes registrar o resolver el proyecto y entrar a su vista operativa.
+        </p>
+      </div>
+      <div class="cluster">
+        <span class="pill">agente ejecuta</span>
+        <span class="pill">July recuerda</span>
+        <span class="pill">UI inspecciona</span>
+      </div>
+    </div>
+
+    <form method="post" action="/projects/open">
+      <div class="grid two">
+        <label>
+          Repo path
+          <input type="text" name="repo_path" placeholder="C:\Users\sergi\Desktop\Aplicaciones\Dashboard_AV">
+        </label>
+        <label>
+          Project key opcional
+          <input type="text" name="project_key" placeholder="dashboard-av">
+        </label>
+      </div>
+      <div class="action-row">
+        <button type="submit">Abrir consola</button>
+      </div>
+    </form>
+  </section>
+
+  <div class="grid layout" style="margin-top: 18px;">
+    <div class="stack">
+      <section class="panel">
+        <div class="section-title">Proyectos recientes</div>
+        {% if projects %}
+          <div class="project-list">
+            {% for project in projects %}
+              <article class="item project-row">
+                <div>
+                  <strong>{{ project.display_name }}</strong>
+                  <div class="small mono">{{ project.project_key }}</div>
+                  <div class="small">{{ project.repo_root }}</div>
+                  <div class="meta">
+                    <span class="pill">{{ project.pending_tasks }} pendientes</span>
+                    <span class="pill">{{ project.memory_items }} memorias</span>
+                    <span class="pill">{{ project.sessions }} sesiones</span>
+                  </div>
+                </div>
+                <div class="small">
+                  Registro canonico listo para abrir el cockpit sin volver a pasar el <span class="mono">repo_path</span>.
+                </div>
+                <form method="post" action="/projects/open">
+                  <input type="hidden" name="project_key" value="{{ project.project_key }}">
+                  <button type="submit" class="secondary">Abrir {{ project.project_key }}</button>
+                </form>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">Todavia no hay proyectos registrados en el cockpit.</div>
+        {% endif %}
+      </section>
+    </div>
+
+    <div class="stack">
+      <section class="panel alt">
+        <div class="section-title">Modelo operativo</div>
+        <ul class="list">
+          <li class="item">
+            <strong>Agente de ejecucion</strong>
+            <div class="small">Analiza el repo, escribe codigo, ejecuta comandos y valida cambios reales.</div>
+          </li>
+          <li class="item">
+            <strong>July</strong>
+            <div class="small">Mantiene memoria operativa, sesiones, decisiones, hallazgos y pendientes reutilizables.</div>
+          </li>
+          <li class="item">
+            <strong>Consola local</strong>
+            <div class="small">Prioriza inspeccion y recuperacion de contexto. Las escrituras viven en acciones explicitas, no en otra experiencia de chat.</div>
+          </li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Direccion UX</div>
+        <div class="small">
+          Esta ventana sigue la idea de una consola de contexto: ver rapido el estado real del proyecto, recuperar memoria util y abrir acciones de escritura solo cuando hagan falta.
+        </div>
+      </section>
+    </div>
+  </div>
+{% endblock %}

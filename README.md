@@ -48,6 +48,7 @@ Accesos directos incluidos:
 
 - `.\scripts\july.ps1 <comando>` para cualquier comando de July.
 - `.\scripts\mcp.ps1` para arrancar el servidor MCP.
+- `.\scripts\ui.ps1 [--open]` para arrancar el cockpit local de July.
 - `.\start-july-mcp.cmd` para arrancar MCP sin recordar comandos de Python o PowerShell.
 
 Si necesitas forzar otra version concreta instalada en tu maquina:
@@ -56,6 +57,21 @@ Si necesitas forzar otra version concreta instalada en tu maquina:
 .\scripts\bootstrap.ps1 -PythonVersion 3.11
 .\scripts\bootstrap.ps1 -PythonVersion 3.13
 ```
+
+### Flujo en WSL / Linux / macOS
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .
+./scripts/july.sh stats
+```
+
+Accesos directos incluidos:
+
+- `./scripts/july.sh <comando>` para cualquier comando de July.
+- `./scripts/mcp.sh` para arrancar el servidor MCP.
+- `./scripts/ui.sh [--open]` para arrancar el cockpit local de July.
+- `./start-july-mcp.sh` para arrancar MCP directamente.
 
 ## Intencion del proyecto
 
@@ -75,7 +91,7 @@ Experiencia objetivo:
 - cuando algo merece persistir, debe poder preguntarlo de forma natural: "quieres que lo guarde?", "quieres que esto quede como referencia para otro momento?";
 - al volver a conversar despues, debe recuperar contexto previo del proyecto sin obligar al usuario a empezar de cero.
 
-Importante: esta es la experiencia objetivo del producto. El codigo actual ya implementa la base de memoria, sesiones, trazabilidad y MCP, pero la capa conversacional automatica todavia esta en construccion.
+Importante: esta es la experiencia objetivo del producto. El codigo actual ya implementa la base de memoria, sesiones, trazabilidad, MCP y un primer cockpit local por proyecto, pero la capa conversacional automatica todavia esta en construccion.
 
 ## Que implementa este corte
 
@@ -104,13 +120,44 @@ Importante: esta es la experiencia objetivo del producto. El codigo actual ya im
 - 17 herramientas MCP expuestas (antes 6).
 - 27 comandos CLI (antes 11).
 
+### Nuevo en v0.3
+
+- Primera capa conversacional por proyecto: `project-entry`, `project-onboard`, `project-action`, `conversation-checkpoint`.
+- `project_entry` detecta si el proyecto es nuevo, parcial o conocido y devuelve un mensaje tipo wizard con opciones.
+- `project_onboard` hace una lectura read-only de README, manifiestos y entrypoints visibles para guardar una primera foto util del repo.
+- `project_action` permite ejecutar la respuesta del wizard sin obligar al usuario a memorizar infraestructura.
+- `conversation_checkpoint` clasifica un hallazgo como guardable, ambiguo o ignorado y puede persistirlo cuando la senal es clara.
+- 21 herramientas MCP expuestas.
+- 31 comandos CLI.
+
+### Nuevo en v0.4
+
+- Primer cockpit local por proyecto en `localhost`, pensado como ventana operativa y no como otro chat.
+- Registro canonico de proyectos en SQLite para resolver `project_key -> repo_root` y soportar deep links estables.
+- `ProjectCockpitService` como capa de lectura y acciones explicitas sobre sesiones, decisiones, hallazgos y pendientes.
+- UI web local con `FastAPI + Jinja2 + uvicorn`, renderizado server-side y formularios HTML simples.
+- Refinamiento inicial de UX del cockpit para priorizar contexto, timeline, memoria reciente y sesiones antes que la escritura manual.
+- Nuevos comandos CLI: `ui` y `ui-link`.
+- Nuevo launcher: `scripts/ui.ps1` y `scripts/ui.sh`.
+- Nuevo tool MCP: `project_ui_link`.
+- 22 herramientas MCP expuestas.
+- 33 comandos CLI.
+
 ## Modelo operativo
 
 Pipeline actual:
 
 `input libre -> extraer urls/rutas/proyecto -> clasificar -> recall proactivo -> guardar inbox -> crear tarea/memoria candidata -> fetch URL metadata -> sugerir referencias externas -> recuperar`
 
-Flujo objetivo sobre ese pipeline:
+Flujo actual sobre ese pipeline:
+
+`proyecto nuevo -> project_entry -> pedir permiso -> project_onboard -> iterar -> conversation_checkpoint -> session-summary -> recuperar contexto`
+
+Flujo local del cockpit:
+
+`abrir repo o project_key -> /projects/{project_key} -> revisar proyecto -> registrar decision/hallazgo -> organizar pendientes -> resumir/cerrar sesion`
+
+Flujo objetivo ampliado:
 
 `proyecto nuevo -> detectar contexto -> ofrecer onboarding/revision -> iterar -> registrar avances y decisiones -> resumir estado -> recuperar contexto en la siguiente conversacion`
 
@@ -267,6 +314,8 @@ Los comandos de abajo son utiles para probar July, depurarlo o usarlo manualment
 
 ### 15. Lanzar el servidor MCP
 
+**Windows (PowerShell):**
+
 ```powershell
 .\scripts\mcp.ps1
 ```
@@ -277,11 +326,76 @@ O directamente:
 .\start-july-mcp.cmd
 ```
 
-Herramientas MCP expuestas actualmente (`17`):
+**WSL / Linux / macOS:**
+
+```bash
+./scripts/mcp.sh
+```
+
+O directamente:
+
+```bash
+./start-july-mcp.sh
+```
+
+### 16. Wizard conversacional por proyecto
+
+```powershell
+# Detectar estado del proyecto y devolver la primera pregunta
+.\scripts\july.ps1 project-entry --repo-path "C:\Users\sergi\Desktop\Aplicaciones\Dashboard_AV"
+
+# Aceptar el analisis read-only inicial
+.\scripts\july.ps1 project-action analyze_now --repo-path "C:\Users\sergi\Desktop\Aplicaciones\Dashboard_AV" --agent codex
+
+# Guardar un hallazgo reutilizable durante la iteracion
+.\scripts\july.ps1 conversation-checkpoint "Decision: usar ExcelJS porque evita automatizaciones fragiles con COM." --repo-path "C:\Users\sergi\Desktop\Aplicaciones\Dashboard_AV" --persist
+```
+
+Notas operativas:
+
+- `project-entry` debe ser el primer paso cuando July entra en un repo nuevo o dudoso.
+- `project-onboard` y `project-action analyze_now` leen el repo en modo solo lectura y guardan la primera foto dentro de la BD de July.
+- `conversation-checkpoint` no debe usarse para volcar ruido; sirve para decisiones, errores resueltos y mejoras de flujo.
+
+### 17. Cockpit local por proyecto
+
+```powershell
+# Arrancar la UI local
+.\scripts\ui.ps1 --open
+
+# Construir un deep link por project_key
+.\scripts\july.ps1 ui-link --project-key dashboard-av
+
+# Registrar o refrescar un proyecto al construir el link
+.\scripts\july.ps1 ui-link --project-key dashboard-av --repo-path "C:\Users\sergi\Desktop\Aplicaciones\Dashboard_AV"
+```
+
+La UI local expone una pagina por proyecto con:
+
+- proyecto activo, `project_key` y `repo_root`;
+- estado `new`, `partial` o `known`;
+- consola de contexto con timeline reciente de memoria, sesiones, inbox y pendientes;
+- sesion activa o ultima sesion;
+- memoria reciente y hallazgos recientes;
+- pendientes manuales;
+- sugerencias read-only;
+- acciones explicitas plegables para revisar proyecto, registrar decision, guardar hallazgo, organizar pendientes y preparar la siguiente sesion.
+
+Variables de configuracion UI:
+
+- `JULY_UI_HOST`
+- `JULY_UI_PORT`
+- `JULY_UI_BASE_URL`
+
+Herramientas MCP expuestas actualmente (`22`):
 
 - `capture_input` (con proactive recall, fetch URLs, model traceability)
 - `search_context`
 - `project_context`
+- `project_entry`
+- `project_onboard`
+- `project_action`
+- `project_ui_link`
 - `list_inbox`
 - `clarify_input`
 - `promote_memory`
@@ -296,8 +410,9 @@ Herramientas MCP expuestas actualmente (`17`):
 - `fetch_url`
 - `fetch_reference`
 - `proactive_recall`
+- `conversation_checkpoint`
 
-Ejemplo de configuracion MCP por stdio:
+Ejemplo de configuracion MCP por stdio (Windows):
 
 ```json
 {
@@ -306,6 +421,20 @@ Ejemplo de configuracion MCP por stdio:
       "command": "cmd",
       "args": ["/c", "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July\\start-july-mcp.cmd"],
       "cwd": "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July"
+    }
+  }
+}
+```
+
+Ejemplo de configuracion MCP por stdio (WSL / Linux / macOS):
+
+```json
+{
+  "mcpServers": {
+    "july": {
+      "command": "bash",
+      "args": ["/ruta/a/July/start-july-mcp.sh"],
+      "cwd": "/ruta/a/July"
     }
   }
 }
@@ -341,6 +470,7 @@ Tablas principales:
 | `model_contributions` | Contribuciones trazables de modelos IA |
 | `url_metadata` | Metadatos extraidos de URLs (titulo, descripcion, YouTube) |
 | `external_references` | Referencias a fuentes externas (skills.sh, agents.md) |
+| `projects` | Registro canonico de proyectos para cockpit y deep links |
 
 Indices FTS5: `inbox_items_fts`, `memory_items_fts`.
 
@@ -433,7 +563,7 @@ Estas sugerencias son puntos de referencia. July toma la idea, la revisa, y crea
 - Las sesiones permiten consolidar el conocimiento de un bloque de trabajo.
 - Los topic keys permiten agrupar conocimiento disperso bajo un mismo hilo.
 - El protocolo por proyecto ya esta definido a nivel documental en `PROJECT_PROTOCOL.md`.
-- El estado actual sigue siendo backend-first: la base de memoria existe y el protocolo ya esta trazado, pero la capa de comportamiento conversacional por proyecto todavia no esta automatizada por completo.
+- El estado actual ya automatiza el primer corte del wizard conversacional por proyecto y un primer cockpit local, pero todavia quedan refinamientos de continuidad, staleness y sugerencias cross-project mas ricas.
 
 ## Contrato publico del proyecto
 

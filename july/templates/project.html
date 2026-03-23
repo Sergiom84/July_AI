@@ -1,0 +1,355 @@
+{% extends "base.html" %}
+
+{% block title %}{{ cockpit.project.display_name }} | July{% endblock %}
+
+{% block content %}
+  <section class="panel hero">
+    <div class="section-title">Proyecto activo</div>
+    <div class="hero-head">
+      <div>
+        <h2>{{ cockpit.project.display_name }}</h2>
+        <p>{{ cockpit.entry.context_summary }}</p>
+      </div>
+      <div class="action-row">
+        <form method="post" action="{{ project_path }}/review">
+          <input type="hidden" name="mode" value="analyze_now">
+          <button type="submit">Revisar proyecto</button>
+        </form>
+        <form method="post" action="{{ project_path }}/review">
+          <input type="hidden" name="mode" value="resume_context">
+          <button type="submit" class="secondary">Recuperar contexto</button>
+        </form>
+        <form method="post" action="{{ project_path }}/review">
+          <input type="hidden" name="mode" value="refresh_context">
+          <button type="submit" class="secondary">Refrescar contexto</button>
+        </form>
+      </div>
+    </div>
+
+    <div class="meta">
+      <span class="pill state-{{ cockpit.entry.project_state }}">{{ cockpit.entry.project_state }}</span>
+      <span class="pill mono">{{ cockpit.project.project_key }}</span>
+      <span class="pill mono">{{ cockpit.project.repo_root }}</span>
+      <span class="pill mono">{{ cockpit.ui_url }}</span>
+    </div>
+
+    <div class="metric-grid">
+      <div class="metric">
+        <strong>{{ cockpit.stats.memory_items }}</strong>
+        <span>memorias</span>
+      </div>
+      <div class="metric">
+        <strong>{{ cockpit.stats.findings }}</strong>
+        <span>hallazgos</span>
+      </div>
+      <div class="metric">
+        <strong>{{ cockpit.stats.pending_tasks }}</strong>
+        <span>pendientes abiertos</span>
+      </div>
+      <div class="metric">
+        <strong>{{ cockpit.stats.sessions }}</strong>
+        <span>sesiones</span>
+      </div>
+      <div class="metric">
+        <strong>{{ cockpit.stats.inbox_items }}</strong>
+        <span>entradas vinculadas</span>
+      </div>
+    </div>
+  </section>
+
+  <div class="grid layout" style="margin-top: 18px;">
+    <div class="stack">
+      <section class="panel">
+        <div class="section-title">Siguiente movimiento</div>
+        <p class="small">{{ cockpit.entry.entry_message }}</p>
+        {% if cockpit.suggestions %}
+          <ul class="list" style="margin-top: 14px;">
+            {% for suggestion in cockpit.suggestions %}
+              <li class="item">
+                <div class="item-header">
+                  <strong>{{ suggestion.title }}</strong>
+                  <span class="badge">{{ suggestion.action_hint }}</span>
+                </div>
+                <div class="small">{{ suggestion.detail }}</div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty" style="margin-top: 14px;">No hay sugerencias adicionales para este proyecto.</div>
+        {% endif %}
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Timeline de contexto</div>
+        {% if cockpit.activity_feed %}
+          <div class="timeline">
+            {% for event in cockpit.activity_feed %}
+              <article class="item">
+                <div class="item-header">
+                  <div>
+                    <strong>{{ event.title }}</strong>
+                    <div class="small">{{ event.detail }}</div>
+                  </div>
+                  <div class="cluster">
+                    <span class="badge">{{ event.label }}</span>
+                    {% if event.timestamp %}
+                      <span class="timestamp">{{ event.timestamp }}</span>
+                    {% endif %}
+                  </div>
+                </div>
+              </article>
+            {% endfor %}
+          </div>
+        {% else %}
+          <div class="empty">Todavia no hay actividad visible para este proyecto.</div>
+        {% endif %}
+      </section>
+
+      <div class="grid two">
+        <section class="panel">
+          <div class="section-title">Memoria reciente</div>
+          {% if cockpit.project_context.memory %}
+            <ul class="list">
+              {% for memory in cockpit.project_context.memory %}
+                <li class="item">
+                  <div class="item-header">
+                    <div>
+                      <strong>{{ memory.title }}</strong>
+                      <div class="small">{{ memory.summary }}</div>
+                    </div>
+                    <div class="cluster">
+                      <span class="badge">{{ memory.memory_kind }}</span>
+                      <span class="timestamp">{{ memory.created_at }}</span>
+                    </div>
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="empty">Todavia no hay memoria de proyecto visible.</div>
+          {% endif %}
+        </section>
+
+        <section class="panel alt">
+          <div class="section-title">Sesiones recientes</div>
+          {% if cockpit.recent_sessions %}
+            <ul class="list">
+              {% for session in cockpit.recent_sessions %}
+                <li class="item">
+                  <div class="item-header">
+                    <div>
+                      <strong>{{ session.session_key }}</strong>
+                      <div class="small">{{ session.summary or session.goal or "Sesion sin resumen todavia" }}</div>
+                    </div>
+                    <div class="cluster">
+                      <span class="badge">{{ session.status }}</span>
+                      <span class="timestamp">{{ session.ended_at or session.started_at }}</span>
+                    </div>
+                  </div>
+                  {% if session.next_steps %}
+                    <div class="small" style="margin-top: 8px;">Siguiente paso: {{ session.next_steps }}</div>
+                  {% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="empty">No hay sesiones registradas todavia.</div>
+          {% endif %}
+        </section>
+      </div>
+    </div>
+
+    <div class="stack">
+      <section class="panel alt">
+        <div class="section-title">Sesion</div>
+        {% if cockpit.active_session %}
+          <div class="item">
+            <div class="item-header">
+              <div>
+                <strong>{{ cockpit.active_session.session_key }}</strong>
+                <div class="small">{{ cockpit.active_session.goal or "Sesion activa sin goal especifico" }}</div>
+              </div>
+              <div class="cluster">
+                <span class="badge">{{ cockpit.active_session.status }}</span>
+                <span class="timestamp">{{ cockpit.active_session.started_at }}</span>
+              </div>
+            </div>
+            {% if cockpit.active_session.summary %}
+              <div class="small" style="margin-top: 8px;">Resumen actual: {{ cockpit.active_session.summary }}</div>
+            {% endif %}
+            {% if cockpit.active_session.next_steps %}
+              <div class="small" style="margin-top: 6px;">Siguiente paso: {{ cockpit.active_session.next_steps }}</div>
+            {% endif %}
+          </div>
+        {% elif cockpit.last_session %}
+          <div class="item">
+            <div class="item-header">
+              <div>
+                <strong>{{ cockpit.last_session.session_key }}</strong>
+                <div class="small">{{ cockpit.last_session.summary or "Ultima sesion sin resumen" }}</div>
+              </div>
+              <div class="cluster">
+                <span class="badge">{{ cockpit.last_session.status }}</span>
+                <span class="timestamp">{{ cockpit.last_session.ended_at or cockpit.last_session.started_at }}</span>
+              </div>
+            </div>
+          </div>
+        {% else %}
+          <div class="empty">No hay sesiones registradas todavia.</div>
+        {% endif %}
+
+        <form method="post" action="{{ project_path }}/sessions/start" style="margin-top: 14px;">
+          <label>
+            Goal de la sesion
+            <input type="text" name="goal" placeholder="Bloque actual de trabajo">
+          </label>
+          <button type="submit" class="secondary">Iniciar o reutilizar sesion</button>
+        </form>
+
+        <form method="post" action="{{ project_path }}/sessions/end" style="margin-top: 10px;">
+          <button type="submit" class="secondary">Cerrar sesion activa</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Pendientes</div>
+        {% if cockpit.pending_tasks %}
+          <ul class="list">
+            {% for task in cockpit.pending_tasks %}
+              <li class="item">
+                <div class="item-header">
+                  <div>
+                    <strong>{{ task.title }}</strong>
+                    <div class="small">Pendiente manual del proyecto</div>
+                  </div>
+                  <div class="cluster">
+                    <span class="badge">{{ task.status }}</span>
+                    <span class="timestamp">{{ task.created_at }}</span>
+                  </div>
+                </div>
+                <div class="action-row" style="margin-top: 10px;">
+                  <form method="post" action="{{ project_path }}/tasks/{{ task.id }}/status">
+                    <input type="hidden" name="status" value="pending">
+                    <button type="submit" class="secondary inline">Pending</button>
+                  </form>
+                  <form method="post" action="{{ project_path }}/tasks/{{ task.id }}/status">
+                    <input type="hidden" name="status" value="in_progress">
+                    <button type="submit" class="secondary inline">In progress</button>
+                  </form>
+                  <form method="post" action="{{ project_path }}/tasks/{{ task.id }}/status">
+                    <input type="hidden" name="status" value="done">
+                    <button type="submit" class="secondary inline">Done</button>
+                  </form>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty">No hay pendientes abiertos para este proyecto.</div>
+        {% endif %}
+      </section>
+
+      <section class="panel alt">
+        <div class="section-title">Acciones de escritura</div>
+        <div class="small">La consola deja visible el contexto. Las escrituras quedan detras de acciones plegables para no saturar la pantalla principal.</div>
+
+        <details class="drawer">
+          <summary>Guardar decision duradera</summary>
+          <div class="drawer-body">
+            <form method="post" action="{{ project_path }}/notes/decision">
+              <label>
+                Decision
+                <textarea name="text" placeholder="Decision: usar X porque evita Y y simplifica Z."></textarea>
+              </label>
+              <button type="submit">Guardar decision</button>
+            </form>
+          </div>
+        </details>
+
+        <details class="drawer">
+          <summary>Guardar hallazgo reutilizable</summary>
+          <div class="drawer-body">
+            <form method="post" action="{{ project_path }}/notes/finding">
+              <label>
+                Hallazgo
+                <textarea name="text" placeholder="Hallazgo: el repo ya resuelve esto en ..."></textarea>
+              </label>
+              <button type="submit" class="secondary">Guardar hallazgo</button>
+            </form>
+          </div>
+        </details>
+
+        <details class="drawer">
+          <summary>Crear pendiente manual</summary>
+          <div class="drawer-body">
+            <form method="post" action="{{ project_path }}/tasks">
+              <label>
+                Titulo
+                <input type="text" name="title" placeholder="Pendiente manual">
+              </label>
+              <label>
+                Detalle
+                <textarea name="details" placeholder="Contexto util para retomarlo"></textarea>
+              </label>
+              <button type="submit">Crear pendiente</button>
+            </form>
+          </div>
+        </details>
+
+        <details class="drawer">
+          <summary>Preparar siguiente sesion</summary>
+          <div class="drawer-body">
+            <form method="post" action="{{ project_path }}/sessions/summary">
+              <label>
+                Resumen
+                <textarea name="summary" placeholder="Que se hizo en esta iteracion"></textarea>
+              </label>
+              <label>
+                Descubrimientos
+                <textarea name="discoveries" placeholder="Hallazgos relevantes"></textarea>
+              </label>
+              <label>
+                Accomplished
+                <textarea name="accomplished" placeholder="Entregables o cambios hechos"></textarea>
+              </label>
+              <label>
+                Next steps
+                <textarea name="next_steps" placeholder="Siguiente bloque de trabajo"></textarea>
+              </label>
+              <label>
+                Relevant files
+                <input type="text" name="relevant_files" placeholder="README.md, july/ui.py, july/cockpit.py">
+              </label>
+              <label>
+                <input type="checkbox" name="close_after_summary" value="on">
+                Cerrar sesion despues de guardar el resumen
+              </label>
+              <button type="submit" class="success">Guardar resumen de sesion</button>
+            </form>
+          </div>
+        </details>
+      </section>
+
+      <section class="panel">
+        <div class="section-title">Hallazgos recientes</div>
+        {% if cockpit.recent_findings %}
+          <ul class="list">
+            {% for finding in cockpit.recent_findings %}
+              <li class="item">
+                <div class="item-header">
+                  <div>
+                    <strong>{{ finding.title }}</strong>
+                    <div class="small">{{ finding.summary }}</div>
+                  </div>
+                  <span class="timestamp">{{ finding.created_at }}</span>
+                </div>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <div class="empty">Todavia no hay hallazgos etiquetados desde este cockpit.</div>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+{% endblock %}

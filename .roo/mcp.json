@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "july": {
+      "command": "cmd",
+      "args": ["/c", "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July\\start-july-mcp.cmd"],
+      "cwd": "C:\\Users\\sergi\\Desktop\\Aplicaciones\\July"
+    }
+  }
+}

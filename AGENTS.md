@@ -142,6 +142,9 @@ Cuando July sugiera consultar una referencia externa (skills.sh, agents.md), el 
 | `capture_input` | Capturar input libre con recall proactivo, fetch URLs y trazabilidad |
 | `search_context` | Buscar en inbox, tareas y memoria |
 | `project_context` | Contexto por proyecto |
+| `project_entry` | Detectar si un proyecto es nuevo, parcial o conocido y devolver el primer mensaje conversacional |
+| `project_onboard` | Leer el repo en modo read-only y guardar una primera foto util del proyecto |
+| `project_action` | Ejecutar la respuesta del wizard conversacional del proyecto |
 | `list_inbox` | Listar inbox |
 | `clarify_input` | Resolver aclaraciones |
 | `promote_memory` | Promover memoria candidata a estable |
@@ -156,3 +159,4 @@ Cuando July sugiera consultar una referencia externa (skills.sh, agents.md), el 
 | `fetch_url` | Extraer metadatos de una URL |
 | `fetch_reference` | Consultar fuente de referencia externa |
 | `proactive_recall` | Buscar proactivamente en memoria |
+| `conversation_checkpoint` | Clasificar un hallazgo como guardable, ambiguo o ignorado y persistirlo si toca |

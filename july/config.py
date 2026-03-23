@@ -15,9 +15,17 @@ class LLMSettings:
 
 
 @dataclass(frozen=True)
+class UISettings:
+    host: str
+    port: int
+    base_url: str | None
+
+
+@dataclass(frozen=True)
 class Settings:
     db_path: Path
     llm: LLMSettings
+    ui: UISettings
 
 
 def load_env_file(path: Path) -> dict[str, str]:
@@ -52,4 +60,9 @@ def get_settings() -> Settings:
         base_url=resolve_env_value("JULY_LLM_BASE_URL", env_file_values),
         timeout_seconds=int(resolve_env_value("JULY_LLM_TIMEOUT", env_file_values, "30")),
     )
-    return Settings(db_path=db_path, llm=llm_settings)
+    ui_settings = UISettings(
+        host=resolve_env_value("JULY_UI_HOST", env_file_values, "127.0.0.1"),
+        port=int(resolve_env_value("JULY_UI_PORT", env_file_values, "4317")),
+        base_url=resolve_env_value("JULY_UI_BASE_URL", env_file_values),
+    )
+    return Settings(db_path=db_path, llm=llm_settings, ui=ui_settings)

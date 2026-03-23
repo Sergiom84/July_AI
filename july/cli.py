@@ -3,8 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from importlib import import_module
 from pathlib import Path
 
+from july.analyzer import analyze_codebase
+from july.cockpit import ProjectCockpitService
 from july.config import get_settings
 from july.db import JulyDatabase
 from july.external_refs import fetch_reference_page
@@ -15,6 +18,7 @@ from july.pipeline import (
     create_capture_plan,
     enrich_plan_with_proactive_recall,
 )
+from july.project_conversation import ProjectConversationService
 from july.url_fetcher import fetch_url_metadata, is_youtube_url
 
 
@@ -63,6 +67,40 @@ def build_parser() -> argparse.ArgumentParser:
     project_context.add_argument("project_key")
     project_context.add_argument("--limit", type=int, default=10)
 
+    project_entry = subparsers.add_parser("project-entry", help="Return the conversational entry state for a project")
+    project_entry.add_argument("--repo-path", default=None, help="Path to the repo to inspect")
+    project_entry.add_argument("--project-key", default=None, help="Optional canonical project key override")
+    project_entry.add_argument("--limit", type=int, default=5)
+
+    project_onboard = subparsers.add_parser("project-onboard", help="Run the initial read-only onboarding for a project")
+    project_onboard.add_argument("--repo-path", default=None, help="Path to the repo to inspect")
+    project_onboard.add_argument("--project-key", default=None, help="Optional canonical project key override")
+    project_onboard.add_argument("--agent", default=None, help="Agent or model name")
+    project_onboard.add_argument("--source", default="cli", help="Source channel for the onboarding trace")
+
+    project_action = subparsers.add_parser("project-action", help="Execute the next conversational action for a project")
+    project_action.add_argument(
+        "action",
+        choices=[
+            "analyze_now",
+            "resume_context",
+            "refresh_context",
+            "continue_without_context",
+            "wait",
+            "do_nothing",
+        ],
+    )
+    project_action.add_argument("--repo-path", default=None, help="Path to the repo to inspect")
+    project_action.add_argument("--project-key", default=None, help="Optional canonical project key override")
+    project_action.add_argument("--agent", default=None, help="Agent or model name")
+
+    checkpoint = subparsers.add_parser("conversation-checkpoint", help="Classify and optionally persist a reusable finding")
+    checkpoint.add_argument("text", nargs="?", help="Checkpoint text. If omitted, stdin is used.")
+    checkpoint.add_argument("--repo-path", default=None, help="Path to the repo to inspect")
+    checkpoint.add_argument("--project-key", default=None, help="Optional canonical project key override")
+    checkpoint.add_argument("--persist", action="store_true", help="Persist immediately when the finding is safe or confirmed")
+    checkpoint.add_argument("--source", default="cli", help="Source channel for the checkpoint")
+
     search = subparsers.add_parser("search", help="Search inbox, tasks, and memory")
     search.add_argument("query")
     search.add_argument("--limit", type=int, default=10)
@@ -71,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
     show.add_argument("table", choices=[
         "inbox_items", "tasks", "memory_items", "artifacts", "project_links",
         "clarification_events", "sessions", "topic_keys", "topic_links",
-        "model_contributions", "url_metadata", "external_references",
+        "model_contributions", "url_metadata", "external_references", "projects",
     ])
     show.add_argument("record_id", type=int)
 
@@ -80,7 +118,29 @@ def build_parser() -> argparse.ArgumentParser:
     export = subparsers.add_parser("export", help="Export the database to JSON")
     export.add_argument("output", nargs="?", default="exports/july-export.json")
 
+    # ── Plug (plugin mode) ──────────────────────────────────
+    plug = subparsers.add_parser("plug", help="Plug July into a project: auto-detect, analyze code, and register")
+    plug.add_argument("path", nargs="?", default=".", help="Path to the project (default: current directory)")
+    plug.add_argument("--project-key", default=None, help="Override the auto-detected project key")
+    plug.add_argument("--agent", default=None, help="Agent or model name")
+    plug.add_argument("--skip-onboard", action="store_true", help="Skip the initial onboarding step")
+
+    # ── Architect insights ───────────────────────────────────
+    architect = subparsers.add_parser("architect", help="Run deep architecture analysis on a project")
+    architect.add_argument("path", nargs="?", default=".", help="Path to the project")
+    architect.add_argument("--project-key", default=None, help="Project key override")
+    architect.add_argument("--json", action="store_true", dest="json_output", help="Output raw JSON")
+
     subparsers.add_parser("mcp", help="Run the July MCP server over stdio")
+
+    ui = subparsers.add_parser("ui", help="Run the July Project Cockpit on localhost")
+    ui.add_argument("--host", default=None, help="Override the UI host")
+    ui.add_argument("--port", type=int, default=None, help="Override the UI port")
+    ui.add_argument("--open", action="store_true", help="Open the cockpit in the default browser")
+
+    ui_link = subparsers.add_parser("ui-link", help="Build a deep link to the July Project Cockpit")
+    ui_link.add_argument("--project-key", required=True, help="Project key to deep-link")
+    ui_link.add_argument("--repo-path", default=None, help="Optional repo path to register or refresh")
 
     # ── Session protocol ─────────────────────────────────────
     ss = subparsers.add_parser("session-start", help="Start a new working session")
@@ -171,10 +231,136 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     database = JulyDatabase(settings)
     llm_provider = create_llm_provider(settings.llm)
+    project_service = ProjectConversationService(database)
+    cockpit_service = ProjectCockpitService(database, settings, project_service)
 
     try:
         if args.command == "mcp":
             return mcp_main()
+
+        if args.command == "ui":
+            ui_module = import_module("july.ui")
+            return ui_module.run_ui_server(host=args.host, port=args.port, open_browser=args.open)
+
+        # ── Plug ──────────────────────────────────────────────
+        if args.command == "plug":
+            from july.project_conversation import detect_repo_root, derive_project_key
+            repo_root = detect_repo_root(args.path)
+            resolved_key = derive_project_key(repo_root, explicit=args.project_key)
+            database.upsert_project(resolved_key, str(repo_root), repo_name=repo_root.name)
+
+            print(f"July enchufado a: {repo_root.name}")
+            print(f"project_key: {resolved_key}")
+            print(f"repo_root: {repo_root}")
+            print()
+
+            # Deep code analysis
+            print("Analizando codigo fuente...")
+            analysis = analyze_codebase(repo_root)
+            print(f"Archivos fuente: {analysis.source_files}")
+            print(f"Lenguajes: {', '.join(f'{lang} ({count})' for lang, count in analysis.languages.items())}")
+            print(f"Arquitectura: {analysis.architecture_pattern}")
+            print()
+
+            if analysis.architecture_insights:
+                print("--- Insights de arquitectura ---")
+                for insight in analysis.architecture_insights:
+                    print(f"  [{insight.pattern}] (confianza: {insight.confidence:.0%})")
+                    print(f"    {insight.detail}")
+                    print(f"    Sugerencia: {insight.suggestion}")
+                print()
+
+            if analysis.code_smells:
+                print(f"--- Code smells ({len(analysis.code_smells)}) ---")
+                for smell in analysis.code_smells[:5]:
+                    print(f"  [{smell.severity}] {smell.file}: {smell.detail}")
+                print()
+
+            if analysis.proactive_questions:
+                print("--- Preguntas del arquitecto ---")
+                for q in analysis.proactive_questions:
+                    print(f"  > {q}")
+                print()
+
+            if analysis.suggestions:
+                print("--- Sugerencias ---")
+                for s in analysis.suggestions:
+                    print(f"  * {s}")
+                print()
+
+            # Onboard if not skipped
+            if not args.skip_onboard:
+                result = project_service.project_onboard(
+                    repo_path=str(repo_root),
+                    project_key=resolved_key,
+                    agent_name=args.agent,
+                    source="plug",
+                )
+                print(f"Onboarding completado. Session: {result['session']['session_key']}")
+
+            return 0
+
+        # ── Architect ────────────────────────────────────────
+        if args.command == "architect":
+            from july.project_conversation import detect_repo_root, derive_project_key
+            repo_root = detect_repo_root(args.path)
+            resolved_key = derive_project_key(repo_root, explicit=args.project_key)
+            analysis = analyze_codebase(repo_root)
+
+            if args.json_output:
+                print(json.dumps(analysis.to_dict(), indent=2, ensure_ascii=True))
+            else:
+                print(f"Proyecto: {repo_root.name} ({resolved_key})")
+                print(f"Archivos fuente: {analysis.source_files} | Total: {analysis.total_files}")
+                print(f"Lenguajes: {', '.join(f'{l} ({c})' for l, c in analysis.languages.items())}")
+                print(f"Arquitectura: {analysis.architecture_pattern}")
+                print()
+
+                if analysis.directory_tree:
+                    print("--- Estructura ---")
+                    for line in analysis.directory_tree[:25]:
+                        print(f"  {line}")
+                    print()
+
+                if analysis.architecture_insights:
+                    print("--- Insights ---")
+                    for i in analysis.architecture_insights:
+                        print(f"  [{i.pattern}] {i.detail}")
+                        print(f"    >> {i.suggestion}")
+                    print()
+
+                if analysis.code_smells:
+                    print(f"--- Code smells ({len(analysis.code_smells)}) ---")
+                    for s in analysis.code_smells[:10]:
+                        print(f"  [{s.severity}] {s.file}: {s.detail}")
+                    print()
+
+                if analysis.dependency_hotspots:
+                    print("--- Dependency hotspots ---")
+                    for h in analysis.dependency_hotspots:
+                        print(f"  [{h['kind']}] {h.get('file', h.get('module', '?'))}: {h['detail']}")
+                    print()
+
+                if analysis.proactive_questions:
+                    print("--- Preguntas ---")
+                    for q in analysis.proactive_questions:
+                        print(f"  > {q}")
+                    print()
+
+                if analysis.suggestions:
+                    print("--- Sugerencias ---")
+                    for s in analysis.suggestions:
+                        print(f"  * {s}")
+
+            return 0
+
+        if args.command == "ui-link":
+            result = cockpit_service.project_ui_link(
+                project_key=args.project_key,
+                repo_path=args.repo_path,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
 
         # ── Capture ──────────────────────────────────────────
         if args.command == "capture":
@@ -278,6 +464,49 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[{section}]")
                 print_rows(rows)
                 print()
+            return 0
+
+        if args.command == "project-entry":
+            result = project_service.project_entry(
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                limit=args.limit,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "project-onboard":
+            result = project_service.project_onboard(
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                agent_name=args.agent,
+                source=args.source,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "project-action":
+            result = project_service.project_action(
+                args.action,
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                agent_name=args.agent,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
+            return 0
+
+        if args.command == "conversation-checkpoint":
+            text = args.text if args.text is not None else sys.stdin.read().strip()
+            if not text:
+                parser.error("conversation-checkpoint requires text or stdin input")
+            result = project_service.conversation_checkpoint(
+                text,
+                repo_path=args.repo_path,
+                project_key=args.project_key,
+                persist=args.persist,
+                source=args.source,
+            )
+            print(json.dumps(result, indent=2, ensure_ascii=True))
             return 0
 
         if args.command == "search":

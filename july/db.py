@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS inbox_items (
 
 CREATE TABLE IF NOT EXISTS tasks (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    inbox_item_id INTEGER NOT NULL REFERENCES inbox_items(id) ON DELETE CASCADE,
+    inbox_item_id INTEGER REFERENCES inbox_items(id) ON DELETE CASCADE,
     task_type TEXT NOT NULL,
     status TEXT NOT NULL,
     title TEXT NOT NULL,
@@ -76,6 +76,17 @@ CREATE TABLE IF NOT EXISTS project_links (
     relation_type TEXT NOT NULL,
     confidence REAL NOT NULL,
     created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_key TEXT NOT NULL UNIQUE,
+    repo_root TEXT NOT NULL,
+    repo_name TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS clarification_events (
@@ -167,6 +178,30 @@ CREATE TABLE IF NOT EXISTS external_references (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS developer_profile (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_key TEXT NOT NULL UNIQUE DEFAULT 'default',
+    inferred_level TEXT NOT NULL DEFAULT 'junior',
+    total_interactions INTEGER NOT NULL DEFAULT 0,
+    decisions_count INTEGER NOT NULL DEFAULT 0,
+    architecture_questions INTEGER NOT NULL DEFAULT 0,
+    code_smells_addressed INTEGER NOT NULL DEFAULT 0,
+    patterns_applied INTEGER NOT NULL DEFAULT 0,
+    last_interaction_at TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS developer_interactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    profile_key TEXT NOT NULL DEFAULT 'default',
+    interaction_type TEXT NOT NULL,
+    complexity TEXT NOT NULL DEFAULT 'basic',
+    project_key TEXT,
+    detail TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS inbox_items_fts USING fts5(
     raw_input,
     normalized_summary,
@@ -241,6 +276,41 @@ class JulyDatabase:
     def _init_db(self) -> None:
         with self.connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._migrate_legacy_schema(conn)
+
+    def _migrate_legacy_schema(self, conn: sqlite3.Connection) -> None:
+        task_columns = conn.execute("PRAGMA table_info(tasks)").fetchall()
+        inbox_item_column = next((row for row in task_columns if row["name"] == "inbox_item_id"), None)
+        if inbox_item_column and inbox_item_column["notnull"]:
+            conn.executescript(
+                """
+                ALTER TABLE tasks RENAME TO tasks_legacy;
+
+                CREATE TABLE tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    inbox_item_id INTEGER REFERENCES inbox_items(id) ON DELETE CASCADE,
+                    task_type TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    details TEXT,
+                    project_key TEXT,
+                    due_hint TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                INSERT INTO tasks (
+                    id, inbox_item_id, task_type, status, title, details, project_key, due_hint,
+                    created_at, updated_at
+                )
+                SELECT
+                    id, inbox_item_id, task_type, status, title, details, project_key, due_hint,
+                    created_at, updated_at
+                FROM tasks_legacy;
+
+                DROP TABLE tasks_legacy;
+                """
+            )
 
     def capture(self, raw_input: str, source_channel: str, source_ref: str | None, plan: dict) -> dict:
         timestamp = utc_now()
@@ -421,6 +491,240 @@ class JulyDatabase:
                 (project_key, limit),
             ).fetchall()
         return {"inbox": inbox_rows, "tasks": task_rows, "memory": memory_rows}
+
+    def upsert_project(
+        self,
+        project_key: str,
+        repo_root: str,
+        *,
+        repo_name: str | None = None,
+        display_name: str | None = None,
+    ) -> dict:
+        timestamp = utc_now()
+        normalized_repo_root = str(Path(repo_root).resolve())
+        normalized_repo_name = repo_name or Path(normalized_repo_root).name
+        normalized_display_name = display_name or normalized_repo_name or project_key.replace("-", " ").title()
+
+        with self.connection() as conn:
+            existing = conn.execute(
+                "SELECT * FROM projects WHERE project_key = ?",
+                (project_key,),
+            ).fetchone()
+            if existing is None:
+                conn.execute(
+                    """
+                    INSERT INTO projects (
+                        project_key, repo_root, repo_name, display_name,
+                        created_at, updated_at, last_seen_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        project_key,
+                        normalized_repo_root,
+                        normalized_repo_name,
+                        normalized_display_name,
+                        timestamp,
+                        timestamp,
+                        timestamp,
+                    ),
+                )
+            else:
+                updated_at = existing["updated_at"]
+                if (
+                    existing["repo_root"] != normalized_repo_root
+                    or existing["repo_name"] != normalized_repo_name
+                    or existing["display_name"] != normalized_display_name
+                ):
+                    updated_at = timestamp
+                conn.execute(
+                    """
+                    UPDATE projects
+                    SET repo_root = ?, repo_name = ?, display_name = ?, updated_at = ?, last_seen_at = ?
+                    WHERE project_key = ?
+                    """,
+                    (
+                        normalized_repo_root,
+                        normalized_repo_name,
+                        normalized_display_name,
+                        updated_at,
+                        timestamp,
+                        project_key,
+                    ),
+                )
+
+            row = conn.execute(
+                "SELECT * FROM projects WHERE project_key = ?",
+                (project_key,),
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def touch_project(self, project_key: str) -> dict | None:
+        timestamp = utc_now()
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE project_key = ?",
+                (project_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute(
+                "UPDATE projects SET last_seen_at = ? WHERE project_key = ?",
+                (timestamp, project_key),
+            )
+            updated = conn.execute(
+                "SELECT * FROM projects WHERE project_key = ?",
+                (project_key,),
+            ).fetchone()
+        return dict(updated) if updated is not None else None
+
+    def get_project(self, project_key: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM projects WHERE project_key = ?",
+                (project_key,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_projects(self, limit: int = 20) -> list[dict]:
+        with self.connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    p.*,
+                    (
+                        SELECT COUNT(*)
+                        FROM tasks t
+                        WHERE t.project_key = p.project_key AND t.status != 'done'
+                    ) AS pending_tasks,
+                    (
+                        SELECT COUNT(*)
+                        FROM memory_items m
+                        WHERE m.project_key = p.project_key
+                    ) AS memory_items,
+                    (
+                        SELECT COUNT(*)
+                        FROM sessions s
+                        WHERE s.project_key = p.project_key
+                    ) AS sessions
+                FROM projects p
+                ORDER BY p.last_seen_at DESC, p.updated_at DESC, p.id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def get_project_totals(self, project_key: str) -> dict[str, int]:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    (
+                        SELECT COUNT(*)
+                        FROM memory_items m
+                        WHERE m.project_key = ?
+                    ) AS memory_items,
+                    (
+                        SELECT COUNT(*)
+                        FROM memory_items m
+                        WHERE m.project_key = ?
+                          AND LOWER(m.title) LIKE 'hallazgo%%'
+                    ) AS findings,
+                    (
+                        SELECT COUNT(*)
+                        FROM tasks t
+                        WHERE t.project_key = ?
+                          AND t.status != 'done'
+                    ) AS pending_tasks,
+                    (
+                        SELECT COUNT(*)
+                        FROM sessions s
+                        WHERE s.project_key = ?
+                    ) AS sessions,
+                    (
+                        SELECT COUNT(*)
+                        FROM inbox_items i
+                        WHERE i.project_key = ?
+                    ) AS inbox_items
+                """,
+                (project_key, project_key, project_key, project_key, project_key),
+            ).fetchone()
+        return dict(row) if row is not None else {
+            "memory_items": 0,
+            "findings": 0,
+            "pending_tasks": 0,
+            "sessions": 0,
+            "inbox_items": 0,
+        }
+
+    def create_manual_task(
+        self,
+        project_key: str,
+        title: str,
+        *,
+        details: str | None = None,
+        status: str = "pending",
+    ) -> dict:
+        if status not in {"pending", "in_progress", "done"}:
+            raise ValueError("Manual task status must be pending, in_progress, or done")
+
+        timestamp = utc_now()
+        with self.connection() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO tasks (
+                    inbox_item_id, task_type, status, title, details, project_key, due_hint,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    None,
+                    "manual_follow_up",
+                    status,
+                    title,
+                    details,
+                    project_key,
+                    None,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (cursor.lastrowid,),
+            ).fetchone()
+        return dict(row) if row is not None else {}
+
+    def update_task_status(
+        self,
+        task_id: int,
+        status: str,
+        *,
+        project_key: str | None = None,
+    ) -> dict:
+        if status not in {"pending", "in_progress", "done"}:
+            raise ValueError("Task status must be pending, in_progress, or done")
+
+        timestamp = utc_now()
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError(f"Task {task_id} not found")
+            if project_key and row["project_key"] != project_key:
+                raise ValueError(f"Task {task_id} does not belong to project {project_key}")
+
+            conn.execute(
+                "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+                (status, timestamp, task_id),
+            )
+            updated = conn.execute(
+                "SELECT * FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+        return dict(updated) if updated is not None else {}
 
     def _insert_task(self, conn: sqlite3.Connection, inbox_item_id: int, task: dict | None, timestamp: str) -> int | None:
         if not task:
@@ -631,7 +935,7 @@ class JulyDatabase:
         allowed_tables = {
             "inbox_items", "tasks", "memory_items", "artifacts", "project_links",
             "clarification_events", "sessions", "topic_keys", "topic_links",
-            "model_contributions", "url_metadata", "external_references",
+            "model_contributions", "url_metadata", "external_references", "projects",
         }
         if table not in allowed_tables:
             raise ValueError(f"Unsupported table: {table}")
@@ -747,6 +1051,22 @@ class JulyDatabase:
                     (limit,),
                 ).fetchall()
         return [dict(r) for r in rows]
+
+    def get_open_session(self, project_key: str) -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                """
+                SELECT id, session_key, project_key, agent_name, goal, status,
+                       summary, discoveries, accomplished, next_steps, relevant_files,
+                       started_at, ended_at
+                FROM sessions
+                WHERE project_key = ? AND ended_at IS NULL AND status IN ('active', 'summarized')
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                (project_key,),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def list_sessions(self, status: str | None = None, limit: int = 20) -> list[sqlite3.Row]:
         query = """
@@ -1090,7 +1410,130 @@ class JulyDatabase:
                 "model_contributions": conn.execute("SELECT COUNT(*) FROM model_contributions").fetchone()[0],
                 "url_metadata": conn.execute("SELECT COUNT(*) FROM url_metadata").fetchone()[0],
                 "external_references": conn.execute("SELECT COUNT(*) FROM external_references").fetchone()[0],
+                "projects": conn.execute("SELECT COUNT(*) FROM projects").fetchone()[0],
+                "developer_interactions": conn.execute("SELECT COUNT(*) FROM developer_interactions").fetchone()[0],
             }
+
+    # ── Developer profile ──────────────────────────────────────
+
+    def get_developer_profile(self, profile_key: str = "default") -> dict | None:
+        with self.connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM developer_profile WHERE profile_key = ?",
+                (profile_key,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def ensure_developer_profile(self, profile_key: str = "default") -> dict:
+        existing = self.get_developer_profile(profile_key)
+        if existing:
+            return existing
+        timestamp = utc_now()
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO developer_profile (
+                    profile_key, inferred_level, total_interactions,
+                    decisions_count, architecture_questions,
+                    code_smells_addressed, patterns_applied,
+                    last_interaction_at, created_at, updated_at
+                ) VALUES (?, 'junior', 0, 0, 0, 0, 0, ?, ?, ?)
+                """,
+                (profile_key, timestamp, timestamp, timestamp),
+            )
+        return self.get_developer_profile(profile_key)
+
+    def record_developer_interaction(
+        self,
+        interaction_type: str,
+        *,
+        complexity: str = "basic",
+        project_key: str | None = None,
+        detail: str | None = None,
+        profile_key: str = "default",
+    ) -> dict:
+        timestamp = utc_now()
+        self.ensure_developer_profile(profile_key)
+
+        with self.connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO developer_interactions (
+                    profile_key, interaction_type, complexity, project_key, detail, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (profile_key, interaction_type, complexity, project_key, detail, timestamp),
+            )
+
+            # Update counters
+            increment_field = {
+                "decision": "decisions_count",
+                "architecture_question": "architecture_questions",
+                "smell_fix": "code_smells_addressed",
+                "pattern_apply": "patterns_applied",
+            }.get(interaction_type)
+
+            update_parts = [
+                "total_interactions = total_interactions + 1",
+                "last_interaction_at = ?",
+                "updated_at = ?",
+            ]
+            params: list = [timestamp, timestamp]
+
+            if increment_field:
+                update_parts.append(f"{increment_field} = {increment_field} + 1")
+
+            conn.execute(
+                f"UPDATE developer_profile SET {', '.join(update_parts)} WHERE profile_key = ?",
+                (*params, profile_key),
+            )
+
+        return self._infer_and_update_level(profile_key)
+
+    def _infer_and_update_level(self, profile_key: str = "default") -> dict:
+        profile = self.get_developer_profile(profile_key)
+        if not profile:
+            return {"level": "junior", "profile": None}
+
+        total = profile["total_interactions"]
+        decisions = profile["decisions_count"]
+        arch_q = profile["architecture_questions"]
+        smells = profile["code_smells_addressed"]
+        patterns = profile["patterns_applied"]
+
+        # Inference logic
+        score = 0
+        score += min(total // 10, 5)  # Up to 5 points for volume
+        score += min(decisions // 3, 4)  # Up to 4 points for decisions
+        score += min(arch_q // 2, 3)  # Up to 3 for architecture engagement
+        score += min(smells // 2, 3)  # Up to 3 for addressing smells
+        score += min(patterns // 2, 3)  # Up to 3 for applying patterns
+
+        if score >= 12:
+            level = "senior"
+        elif score >= 5:
+            level = "mid"
+        else:
+            level = "junior"
+
+        if level != profile["inferred_level"]:
+            with self.connection() as conn:
+                conn.execute(
+                    "UPDATE developer_profile SET inferred_level = ?, updated_at = ? WHERE profile_key = ?",
+                    (level, utc_now(), profile_key),
+                )
+
+        return {
+            "level": level,
+            "score": score,
+            "profile": {**profile, "inferred_level": level},
+        }
+
+    def get_developer_level(self, profile_key: str = "default") -> str:
+        profile = self.get_developer_profile(profile_key)
+        if not profile:
+            return "junior"
+        return profile["inferred_level"]
 
     def export_json(self, output_path: Path) -> None:
         payload: dict[str, list[dict]] = {}
@@ -1098,7 +1541,8 @@ class JulyDatabase:
             for table in (
                 "inbox_items", "tasks", "memory_items", "artifacts", "project_links",
                 "clarification_events", "sessions", "topic_keys", "topic_links",
-                "model_contributions", "url_metadata", "external_references",
+                "model_contributions", "url_metadata", "external_references", "projects",
+                "developer_profile", "developer_interactions",
         ):
                 rows = conn.execute(f"SELECT * FROM {table} ORDER BY id ASC").fetchall()
                 payload[table] = [dict(row) for row in rows]

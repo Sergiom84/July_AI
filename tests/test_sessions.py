@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from july.config import LLMSettings, Settings
+from july.config import LLMSettings, Settings, UISettings
 from july.db import JulyDatabase
 
 
@@ -17,6 +17,11 @@ def build_test_settings(db_path: Path) -> Settings:
             api_key=None,
             base_url=None,
             timeout_seconds=30,
+        ),
+        ui=UISettings(
+            host="127.0.0.1",
+            port=4317,
+            base_url=None,
         ),
     )
 
